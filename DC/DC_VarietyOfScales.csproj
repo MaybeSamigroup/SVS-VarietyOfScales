@@ -84,10 +84,6 @@
             <HintPath>$(GamePath)\BepInEx\plugins\DC_Fishbone.dll</HintPath>
             <Private>False</Private>
         </Reference>
-        <Reference Include="Fishbone">
-            <HintPath>$(GamePath)\BepInEx\plugins\DC_SardineTail.dll</HintPath>
-            <Private>False</Private>
-        </Reference>
     </ItemGroup>
     <Target Name="Deploy" AfterTargets="Build">
         <Copy SourceFiles="$(OutputPath)\$(AssemblyName).dll" DestinationFolder="$(GamePath)\BepInEx\plugins\" />

@@ -10,7 +10,6 @@ using UniRx;
 using Character;
 using Fishbone;
 using CoastalSmell;
-using SardineTail;
 using Parent = ChaAccessoryDefine.AccessoryParentKey;
 using AcsNode = Character.HumanAccessory;
 using AcsLeaf = Character.HumanAccessory.Accessory;
@@ -20,89 +19,6 @@ using IlVector3Array = Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppStructArr
 
 namespace VarietyOfScales
 {
-    public class PatternMod
-    {
-        public ModInfo Mod { get; set; }
-        public int Id { get; set; }
-        public Float4 Color { get; set; }
-        public Float2 Offset { get; set; }
-        public Float2 Tiling { get; set; }
-        public float Rotate { get; set; }
-        void None(AcsPart.ColorInfo info) =>
-            info.pattern = 0;
-        void Mods(AcsPart.ColorInfo info)
-        {
-            info.pattern = ModInfo.Translate[ChaListDefine.CategoryNo.mt_pattern].ToId(Mod, Id);
-            info.patternColor = Color;
-            info.offset = Offset;
-            info.tiling = Tiling;
-            info.rotate = Rotate;
-        }
-        internal void Apply(AcsPart.ColorInfo info) =>
-            (Id == 0).Either(F.Apply(Mods, info), F.Apply(None, info));
-        internal static PatternMod ToMod(AcsPart.ColorInfo info) =>
-            info.pattern == 0 ? new PatternMod() { Id = 0 } : new()
-            {
-                Mod = ModInfo.Translate[ChaListDefine.CategoryNo.mt_pattern].FromId(info.pattern),
-                Id = info.pattern,
-                Color = info.patternColor,
-                Offset = info.offset,
-                Tiling = info.tiling,
-                Rotate = info.rotate
-            };
-    }
-    public class DataMod
-    {
-        public ModInfo Mod { get; set; }
-        public int Type { get; set; }
-        public int Id { get; set; }
-        public int Parent { get; set; }
-        public int HideCategory { get; set; }
-        public bool PartsOfHead { get; set; }
-        public bool NoShake { get; set; }
-        public bool UseFK { get; set; }
-        public List<PatternMod> Patterns { get; set; }
-        public List<Float3> Bones { get; set; }
-        public List<Float4> Colors { get; set; }
-        void None(AcsPart part) =>
-            part.Copy(AcsNode.NoneAcsData);
-        void Mods(AcsPart part)
-        {
-            part.type = Type;
-            part.id = ModInfo.Translate[(ChaListDefine.CategoryNo)Type].ToId(Mod, Id);
-            part.parentKeyType = Parent;
-            part.hideCategory = HideCategory;
-            part.partsOfHead = PartsOfHead;
-            part.noShake = NoShake;
-            part.fkInfo.use = UseFK;
-            part.fkInfo.bones = Bones.Select(f3 => (Vector3)f3).ToArray();
-            part.color = Colors.Select(f4 => (Color)f4).ToArray();
-            Patterns.ForEachIndex((pattern, index) => pattern.Apply(part.colorInfo[index]));
-        }
-        void Apply(AcsPart part) =>
-            ((Type, Id) is (120, 0)).Either(F.Apply(Mods, part), F.Apply(None, part));
-        void Apply(AcsNode node, AcsPart part, int slot) =>
-            node.ChangeAccessory(slot, part.type, part.id, (Parent)part.parentKeyType, true);
-        internal void Apply(Human human, int slot) =>
-            Apply(human.acs, human.acs.nowCoordinate.Accessory.parts[slot].With(Apply)
-                .With(human.data.Coordinates[human.data.Status.coordinateType].Accessory.parts[slot].Copy), slot);
-        internal static readonly DataMod Default = new DataMod() { Type = 120, Id = 0 };
-        internal static DataMod ToMod(AcsPart part) =>
-            part.type == 120 ? Default : new()
-            {
-                Mod = ModInfo.Translate[(ChaListDefine.CategoryNo)part.type].FromId(part.id),
-                Type = part.type,
-                Id = part.id,
-                Parent = part.parentKeyType,
-                HideCategory = part.hideCategory,
-                PartsOfHead = part.partsOfHead,
-                NoShake = part.noShake,
-                UseFK = part.fkInfo.use,
-                Bones = part.fkInfo.bones.Select(v3 => (Float3)v3).ToList(),
-                Colors = part.color.Select(color => (Float4)color).ToList(),
-                Patterns = part.colorInfo.Select(PatternMod.ToMod).ToList(),
-            };
-    }
     public struct Move
     {
         public Float3 Position { get; set; }
@@ -124,8 +40,13 @@ namespace VarietyOfScales
         public List<Move> Moves { get; set; }
         void Apply(AcsLeaf leaf) =>
             leaf.objAcsMove.ForEachIndex((tf, index) => Moves.ElementAtOrDefault(index).Apply(tf));
+        Action<AcsNode> Apply(AcsPart part, int slot) => node =>
+            node.ChangeAccessory(slot, part.type, part.id, (Parent)part.parentKeyType, true);
+
+        AcsPart ToTargetPart(HumanData data, int slot) =>
+            data.Coordinates[data.Status.coordinateType].Accessory.parts[slot]; 
         internal void Apply(Human human, int slot) =>
-            Apply(human.acs.accessories[slot]);
+            Apply(human.acs.With(Apply(ToTargetPart(human.data, slot), slot)).accessories[slot]);
         internal static readonly MoveMod Default = new MoveMod { Moves = new() };
         internal static MoveMod ToMod(AcsLeaf leaf) => new()
         {
@@ -135,20 +56,14 @@ namespace VarietyOfScales
     [BonesToStuck(Plugin.Name, "modifications.json")]
     public class CoordMods
     {
-        public List<DataMod> DataMods { get; set; }
         public List<MoveMod> MoveMods { get; set; }
-        public CoordMods() => (DataMods, MoveMods) = (new(), new());
-        void ApplyDatas(Human human) =>
-            DataMods.ForEachIndex((mods, index) => mods.Apply(human, index + 20));
+        public CoordMods() => MoveMods = new();
         void ApplyMoves(Human human) =>
             MoveMods.ForEachIndex((mods, index) => mods.Apply(human, index + 20));
         internal void Apply(Human human) =>
-            human.With(ApplyDatas).With(ApplyMoves);
+            human.With(ApplyMoves);
         internal static CoordMods ToMod(Human human) => new()
         {
-            DataMods = Enumerable.Range(20, human.acs.accessories.Count - 20)
-                .Select(slot => human.acs.nowCoordinate.Accessory.parts[slot])
-                .Select(DataMod.ToMod).ToList(),
             MoveMods = Enumerable.Range(20, human.acs.accessories.Count - 20)
                 .Select(slot => human.acs.accessories[slot])
                 .Select(MoveMod.ToMod).ToList()
@@ -170,7 +85,7 @@ namespace VarietyOfScales
                 .Maybe(F.Apply(mods.Apply, human));
         int ExtensionSlots =>
             Coordinates.Values
-                .Select(mods => mods.DataMods.Count)
+                .Select(mods => mods.MoveMods.Count)
                 .Append(AccessoryExtensions.ExtensionSlots).Max();
         void Prepare(Human human) =>
             Enumerable.Repeat(human.Increase,
@@ -256,8 +171,7 @@ namespace VarietyOfScales
     }
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.GetAccessoryDefaultColorData), typeof(int))]
         static bool GetAccessoryDefaultColorDataPrefix(AcsNode __instance, int slotNo, ref AcsNode.DefaultColorData __result) =>
             null == (__result = F.Apply(__instance.GetDefaultColorData, slotNo).Bypass(slotNo));
@@ -269,8 +183,7 @@ namespace VarietyOfScales
     }
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.ChangeAccessory), typeof(int), typeof(int), typeof(int), typeof(Parent), typeof(bool))]
         static bool ChangeAccessoryPrefix(AcsNode __instance, int slotNo, int type, int id, Parent parentKey, bool forceChange) =>
             F.Apply(__instance.Change, slotNo, type, id, parentKey, forceChange).Bypass(slotNo);
@@ -316,9 +229,9 @@ namespace VarietyOfScales
                     cmp.useColor01 ? cmp.defColor02 : part.color[1],
                     cmp.useColor02 ? cmp.defColor03 : part.color[2],
                     cmp.useColor03 ? cmp.defColor04 : part.color[3])
-                .With(F.Apply(F.Maybe, cmp.HasPattern(0), F.Apply(ApplyDefaults, cmp.pattern01, part.colorInfo[0])))
-                .With(F.Apply(F.Maybe, cmp.HasPattern(1), F.Apply(ApplyDefaults, cmp.pattern02, part.colorInfo[1])))
-                .With(F.Apply(F.Maybe, cmp.HasPattern(2), F.Apply(ApplyDefaults, cmp.pattern03, part.colorInfo[2])));
+                .With(F.Apply(ApplyDefaults, cmp.pattern01, part.colorInfo[0]))
+                .With(F.Apply(ApplyDefaults, cmp.pattern02, part.colorInfo[1]))
+                .With(F.Apply(ApplyDefaults, cmp.pattern03, part.colorInfo[2]));
         static void ApplyDefaults(ChaAccessoryComponent.Pattern defaults, AcsPart.ColorInfo info) =>
             (info.pattern, info.patternColor, info.offset, info.rotate, info.tiling) =
                 (defaults.patternID, defaults.defColor, defaults.offset, defaults.rotate, defaults.tiling);
@@ -329,8 +242,7 @@ namespace VarietyOfScales
     }
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.ChangeAccessoryColor), typeof(int))]
         static bool ChangeAccessoryColorPrefix(AcsNode __instance, int slotNo, ref bool __result) =>
             (__result = true) && F.Apply(__instance.ChangeColor, slotNo).Bypass(slotNo);
@@ -355,8 +267,7 @@ namespace VarietyOfScales
     }
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.ChangeAccessoryParent), typeof(int), typeof(Parent))]
         static bool ChangeAccessoryParentPrefix(AcsNode __instance, int slotNo, Parent parentKey, bool __result) =>
             (__result = true) && F.Apply(__instance.ChangeParent, slotNo, parentKey).Bypass(slotNo);
@@ -368,8 +279,7 @@ namespace VarietyOfScales
     }
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.ChangeAccessoryPatternTexture), typeof(int), typeof(int))]
         static bool ChangeAccessoryPatternTexturePrefix(AcsNode __instance, int slotNo, int index, bool __result) =>
             (__result = true) && F.Apply(__instance.ChangePatternTexture, slotNo, index).Bypass(slotNo);
@@ -383,17 +293,15 @@ namespace VarietyOfScales
             (leaf.cusAcsCmp != null && leaf.cusAcsCmp.HasPattern(index))
                 .Maybe(F.Apply(ChangePatternTexture, leaf.renderers.ToArray(), ChaShader.Accessory.GetPatternMaskID(index), human, part, index));
         static void ChangePatternTexture(Renderer[] renderers, int shaderId, Human human, AcsPart part, int index) =>
-            ToPatternTexture(human, part.colorInfo[index].pattern, out var texture).Maybe(F.Apply(ChangeTexture, renderers, shaderId, texture));
-        static bool ToPatternTexture(Human human, int id, out Texture2D texture) =>
-            null != (texture = human.GetTexture(ChaListDefine.CategoryNo.mt_pattern,
-                id, ChaListDefine.KeyType.MainTexAB, ChaListDefine.KeyType.MainTex));
+            ChangeTexture(renderers, shaderId, ToPatternTexture(human, part.colorInfo[index].pattern));
+        static Texture2D ToPatternTexture(Human human, int id) =>
+            human.GetTexture(ChaListDefine.CategoryNo.mt_pattern, id, ChaListDefine.KeyType.MainTexAB, ChaListDefine.KeyType.MainTex);
         static void ChangeTexture(Renderer[] renderers, int shaderId, Texture2D texture) =>
             renderers.ForEach(renderer => renderer.material.SetTexture(shaderId, texture));
     }
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.ChangeAccessoryPatternColor), typeof(int), typeof(int))]
         static bool ChangeAccessoryPatternColorPrefix(AcsNode __instance, int slotNo, int index, ref bool __result) =>
             (__result = true) && F.Apply(__instance.ChangePatternColor, slotNo, index).Bypass(slotNo);
@@ -409,8 +317,7 @@ namespace VarietyOfScales
     }
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.ChangeAccessoryPatternParameter), typeof(int), typeof(int))]
         static bool ChangeAccessoryPatternParameter(AcsNode __instance, int slotNo, int index, bool __result) =>
             (__result = true) && F.Apply(__instance.ChangePatternParams, slotNo, index).Bypass(slotNo);
@@ -439,18 +346,15 @@ namespace VarietyOfScales
     }
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.SetAccessoryPos))]
         static bool SetAccessoryPosPrefix(AcsNode __instance, int slotNo, int correctNo, float value, bool add, int flag) =>
             F.Apply(__instance.SetPosition, slotNo, correctNo, value, add, flag).Bypass(slotNo);
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.SetAccessoryRot))]
         static bool SetAccessoryRotPrefix(AcsNode __instance, int slotNo, int correctNo, float value, bool add, int flag) =>
             F.Apply(__instance.SetRotation, slotNo, correctNo, value, add, flag).Bypass(slotNo);
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.SetAccessoryScl))]
         static bool SetAccessorySclPrefix(AcsNode __instance, int slotNo, int correctNo, float value, bool add, int flag) =>
             F.Apply(__instance.SetScale, slotNo, correctNo, value, add, flag).Bypass(slotNo);
@@ -475,7 +379,7 @@ namespace VarietyOfScales
         static float PositionAdjust(float value) =>
             value < -100 ? -100 : value > 100 ? 100 : value;
         static float RotationAdjust(float value) =>
-            value >= 0 ? value % 360 : 360 + (value % 360);
+            (value < 0 ? value + 360 : value) % 360;
         static float ScaleAdjust(float value) =>
             value < 0.1f ? 0.1f : value > 100 ? 100 : value;
         static Func<float, float, float> PositionAdjust(bool add) =>
@@ -499,8 +403,7 @@ namespace VarietyOfScales
     }
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.SetupAccessoryFK), typeof(int))]
         static bool SetupAccessoryFKPrefix(AcsNode __instance, int slotNo) =>
             F.Apply(__instance.SetupFK, slotNo).Bypass(slotNo);
@@ -516,13 +419,11 @@ namespace VarietyOfScales
     }
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.UpdateAccessoryFK), typeof(int), typeof(IlVector3Array))]
         static bool UpdateAccessoryFKPrefix(AcsNode __instance, int slotNo, IlVector3Array values) =>
             F.Apply(__instance.UpdateFK, slotNo, values).Bypass(slotNo);
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.UpdateAccessoryFK), typeof(int))]
         static bool UpdateAccessoryFKPrefix(AcsNode __instance, int slotNo) =>
             F.Apply(__instance.UpdateFK, slotNo).Bypass(slotNo);
@@ -538,8 +439,7 @@ namespace VarietyOfScales
     }
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.SetAccessoryFK), typeof(int), typeof(int), typeof(float), typeof(bool), typeof(int))]
         static bool SetAccessoryFKPrefix(AcsNode __instance, int slotNo, int correctNo, float value, bool add, int flag) =>
             F.Apply(__instance.SetFK, slotNo, correctNo, value, add, flag).Bypass(slotNo);
@@ -554,15 +454,23 @@ namespace VarietyOfScales
         static void SetFK(AcsLeaf leaf, AcsPart.FKInfo info, int correctNo, Func<Vector3, Vector3> modifier) =>
             leaf.objAcsFK[correctNo].localEulerAngles = info.bones[correctNo] = modifier(info.bones[correctNo]);
     }
+    internal static partial class Hooks
+    {
+        [HarmonyPrefix, HarmonyWrapSafe]
+        [HarmonyPatch(typeof(AcsLeaf), nameof(AcsLeaf.ResetCloth))]
+        static bool AccessoryResetCloth(AcsLeaf __instance) =>
+            __instance != null;
+    }
+
     [BepInProcess(Process)]
-    [BepInDependency(SardineTail.Plugin.Guid)]
+    [BepInDependency(Fishbone.Plugin.Guid)]
     [BepInPlugin(Guid, Name, Version)]
     public partial class Plugin : BasePlugin
     {
         internal static Plugin Instance;
         public const string Name = "VarietyOfScales";
         public const string Guid = $"{Process}.{Name}";
-        public const string Version = "1.0.0";
+        public const string Version = "0.2.0";
         private Harmony Patch;
         public override bool Unload() =>
                 true.With(Patch.UnpatchSelf) && base.Unload();

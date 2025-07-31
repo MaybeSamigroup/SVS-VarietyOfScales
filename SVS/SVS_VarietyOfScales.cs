@@ -22,15 +22,13 @@ using AcsData = Character.HumanDataAccessory;
 using AcsPart = Character.HumanDataAccessory.PartsInfo;
 using CharaLimit = Character.HumanData.LoadLimited.Flags;
 using CoordLimit = Character.HumanDataCoordinate.LoadLimited.Flags;
-using UnityEngine.EventSystems;
 using Cysharp.Threading.Tasks;
 
 namespace VarietyOfScales
 {
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(HumanCustom), nameof(HumanCustom.GetSlotName))]
         static bool GetSlotNamePrefix(int slotNo, ref string __result) =>
             (__result = HumanCustom.Instance.Human.coorde.nowCoordinate.Accessory.ToSlotName(slotNo)) == null;
@@ -49,13 +47,11 @@ namespace VarietyOfScales
     }
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsEdit), nameof(AcsEdit.SetColorWindow))]
         static bool SetColorWindowPrefix(AcsEdit __instance, int slotNo, int index, ThumbnailColor acsColors, Il2CppSystem.Func<bool> updateUI) =>
             F.Apply(acsColors.InitAcs, __instance._humanAcs, slotNo, index, updateUI).Bypass(slotNo);
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(PatternEdit), nameof(PatternEdit.SetColorPtnWindow))]
         static bool SetColorPtnWindowPrefix(PatternEdit __instance, int slotNo, int index, ThumbnailColor ptnColor, Il2CppSystem.Func<bool> updateUI) =>
             F.Apply(ptnColor.InitPtn, __instance._humanAcs, slotNo, index, updateUI).Bypass(slotNo);
@@ -95,13 +91,67 @@ namespace VarietyOfScales
     }
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        static Func<int, Func<HumanData, float>, Func<HumanData, float>> DefaultReset = (_, f) => f;
+        static Func<int, Func<HumanData, float>, Func<HumanData, float>> PatternReset = DefaultReset;
+        static int ParameterIndex = -1;
+
+        [HarmonyPrefix, HarmonyWrapSafe]
+        [HarmonyPatch(typeof(PatternEdit), nameof(PatternEdit.Setting))]
+        static void PatternEditSettingPrefix(PatternEdit __instance, int slotNo, int index) =>
+            (ParameterIndex, PatternReset) = (0, (value, original) => (value, index) switch
+            {
+                (0, 0) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern01._offset.x,
+                (1, 0) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern01._offset.y,
+                (2, 0) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern01._rotate,
+                (3, 0) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern01._tiling.x,
+                (4, 0) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern01._tiling.y,
+                (0, 1) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern02._offset.x,
+                (1, 1) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern02._offset.y,
+                (2, 1) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern02._rotate,
+                (3, 1) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern02._tiling.x,
+                (4, 1) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern02._tiling.y,
+                (0, 2) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern03._offset.x,
+                (1, 2) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern03._offset.y,
+                (2, 2) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern03._rotate,
+                (3, 2) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern03._tiling.x,
+                (4, 2) => data => __instance._humanAcs.accessories[slotNo].cusAcsCmp.pattern03._tiling.y,
+                _ => original
+            });
+        [HarmonyPrefix, HarmonyWrapSafe]
+        [HarmonyPatch(typeof(CategoryEdit), nameof(CategoryEdit.CreateCategory))]
+        static void CategoryEditCreateCategoryPrefix(CategoryEdit.NowCategory nowCategory) =>
+            (ParameterIndex, PatternReset) = HumanCustom.Instance.NowCategory.Category == 4 &&
+                nowCategory.DataList.Yield().Select(item => item.Title)
+                    .ToArray().CheckEditTitles() ? (ParameterIndex, PatternReset) : (-1, DefaultReset);
+
+        [HarmonyPrefix, HarmonyWrapSafe]
+        [HarmonyPatch(typeof(InputSliderButton), nameof(InputSliderButton.Initialize))]
+        static void InputSliderButtonInitializePrefix(ref Il2CppSystem.Func<HumanData, float> resetValue) =>
+            (resetValue, ParameterIndex) = (
+                PatternReset(ParameterIndex, resetValue.Invoke), ParameterIndex + 1.With(() => Plugin.Instance.Log.LogInfo("isb init")));
+    }
+    static partial class AccessoryExtensions
+    {
+        internal static bool CheckEditTitles(this string[] titles) =>
+            3 == titles.Length
+                && titles[0].Equals(CategoryEdit.CategoryData.GetTitle(CategoryEdit.CategoryData.TitleID.Kind))
+                && titles[1].Equals(CategoryEdit.CategoryData.GetTitle(CategoryEdit.CategoryData.TitleID.Color))
+                && titles[2].Equals(CategoryEdit.CategoryData.GetTitle(CategoryEdit.CategoryData.TitleID.Correct));
+        internal static void SubscribeEditCategoryChange(this CategoryEdit ui, CategoryEdit.NowCategory data) =>
+            data._onChanged += OnEditCategoryChange(ui);
+        static Action<CategoryEdit.NowCategory> OnEditCategoryChange(CategoryEdit ui) =>
+            data => (data.Sel == 2).Maybe(ui.ListupSliders);
+        static void ListupSliders(this CategoryEdit ui) =>
+            Plugin.Instance.Log.LogInfo($"Now time: {ui._parameterWindow
+                .GetComponentsInChildren<InputSliderButton>().Select(isb => isb._title._tmpText.text).Join()}");
+    }
+    internal static partial class Hooks
+    {
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AccessoryParentWindow), nameof(AccessoryParentWindow.Get), typeof(int))]
         static bool GetAccessoryParent(AccessoryParentWindow __instance, int slotNo, ref int __result) =>
             (__result = __instance._acsData.parts[slotNo].parentKeyType) is not 0;
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(ParentEdit), nameof(ParentEdit.ChangeAccessoryParent), typeof(int))]
         static bool ChangeAccessoryParentPrefix(ParentEdit __instance, int slotNo) =>
             F.Apply(__instance._humanAcs.ChangeParent, __instance._acsData,
@@ -116,88 +166,87 @@ namespace VarietyOfScales
     }
     internal static partial class Hooks
     {
-        [HarmonyPostfix]
-        [HarmonyWrapSafe]
-        [HarmonyPatch(typeof(AccessoryMoveWindow), nameof(AccessoryMoveWindow.UpdateCustomUI), [])]
-        static void AccessoryMoveWindowUpdateCustomUIPostfix(AccessoryMoveWindow __instance) =>
-            __instance.PrepareMoveEvents();
-
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
-        [HarmonyPatch(typeof(AccessoryMoveWindow), nameof(AccessoryMoveWindow.UpdateSelection))]
+        [HarmonyPostfix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AccessoryMoveWindow), nameof(AccessoryMoveWindow.SetControllerTransform))]
-        static bool AccessoryMoveWindowUpdateCustomUIPostfix(AccessoryMoveWindow __instance, int slotNo, int editNo) =>
+        static void AccessoryMoveWindowSetControllerTransformPostfix(AccessoryMoveWindow __instance, int slotNo, int editNo) =>
             F.Apply(__instance._humanAcs.UpdateMoveUI, slotNo, editNo, __instance._guidList[editNo],
                 __instance._movePairs.Where(pair => pair.Active).Select(pair => pair.MoveGroup).ToArray()).Bypass(slotNo);
     }
     static partial class AccessoryExtensions
     {
-        internal static void PrepareMoveEvents(this AccessoryMoveWindow ui) =>
-            ui._movePairs.ForEachIndex((mp, index) => ((index % 3) switch
-            {
-                0 => F.Apply(PreparePositionEvent, TargetTransform(ui), mp._moveGroup, ui._disposables),
-                1 => F.Apply(PrepareRotationEvent, TargetTransform(ui), mp._moveGroup, ui._disposables),
-                2 => F.Apply(PrepareScaleEvent, TargetTransform(ui), mp._moveGroup, ui._disposables),
-                _ => throw new NotImplementedException()
-            })());
-        static Func<Transform> TargetTransform(AccessoryMoveWindow ui) =>
-            () => ui._humanAcs.accessories[ui._slotNo].objAcsMove[ui._editNo].transform;
-        static void PreparePositionEvent(Func<Transform> getTf, MoveGroup ui, CompositeDisposable disps) =>
-            UpdateMoveEvents(ui.gameObject, disps, getTf,
-                (tf, value) => tf.localPosition = new(value / 100f, tf.localPosition.y, tf.localPosition.z),
-                (tf, value) => tf.localPosition = new(tf.localPosition.x, value / 100f, tf.localPosition.z),
-                (tf, value) => tf.localPosition = new(tf.localPosition.x, tf.localPosition.y, value / 100f));
-        static void PrepareRotationEvent(Func<Transform> getTf, MoveGroup ui, CompositeDisposable disps) =>
-            UpdateMoveEvents(ui.gameObject, disps, getTf,
-                (tf, value) => tf.localEulerAngles = new(value, tf.localEulerAngles.y, tf.localEulerAngles.z),
-                (tf, value) => tf.localEulerAngles = new(tf.localEulerAngles.x, value, tf.localEulerAngles.z),
-                (tf, value) => tf.localEulerAngles = new(tf.localEulerAngles.x, tf.localEulerAngles.y, value));
-        static void PrepareScaleEvent(Func<Transform> getTf, MoveGroup ui, CompositeDisposable disps) =>
-            UpdateMoveEvents(ui.gameObject, disps, getTf,
-                (tf, value) => tf.localScale = new(value, tf.localScale.y, tf.localScale.z),
-                (tf, value) => tf.localScale = new(tf.localScale.x, value, tf.localScale.z),
-                (tf, value) => tf.localScale = new(tf.localScale.x, tf.localScale.y, value));
-        static void UpdateMoveEvents(GameObject go, CompositeDisposable disps, Func<Transform> getTf,
-            Action<Transform, float> setX, Action<Transform, float> setY, Action<Transform, float> setZ) =>
-             go.With(
-                UGUI.ModifyAt("Controller", "Move", "X", "InputField_Decimal")
-                    (UGUI.Cmp<TMP_InputField>(ui => disps.With(PrepareResetEvent( go, ui, "X"))
-                        .Add(ui.onSubmit.AsObservable().Subscribe(PrepareOnSubmit(getTf, setX))))) +
-                UGUI.ModifyAt("Controller", "Move", "Y", "InputField_Decimal")
-                    (UGUI.Cmp<TMP_InputField>(ui => disps.With(PrepareResetEvent(go, ui, "Y"))
-                        .Add(ui.onSubmit.AsObservable().Subscribe(PrepareOnSubmit(getTf, setY))))) +
-                UGUI.ModifyAt("Controller", "Move", "Z", "InputField_Decimal")
-                    (UGUI.Cmp<TMP_InputField>(ui => disps.With(PrepareResetEvent(go, ui, "Z"))
-                        .Add(ui.onSubmit.AsObservable().Subscribe(PrepareOnSubmit(getTf, setZ))))));
-        static Action<CompositeDisposable> PrepareResetEvent(GameObject go, TMP_InputField text, string axis) =>
-            disps => go.With(UGUI.ModifyAt("Controller", "Move", axis, "btnDefault")
-                (UGUI.Cmp<Button>(button => disps.Add(button
-                    .OnClickAsObservable().Subscribe((F.Apply(text.SetText, "0", false) + text.SendOnSubmit).Ignoring<Unit>())))));
-        static Action<string> PrepareOnSubmit(Func<Transform> getter, Action<Transform, float> setter) =>
-            input => float.TryParse(input, out var value).Maybe(F.Apply(setter, getter(), value));
         internal static void UpdateMoveUI(this AcsNode node, int slot, int index, GuideObject guide, MoveGroup[] moves) =>
             UpdateMoveUI(node.accessories[slot].objAcsMove[index].With(guide.Amount.Set), moves);
-        static void UpdateMoveUI(Transform tf, MoveGroup[] moves) =>
-            moves.ForEachIndex((ui, index) => (index switch
-            {
-                0 => UpdateMoveUI("##0.#", tf.localPosition * 100.0f),
-                1 => UpdateMoveUI("##0", tf.localEulerAngles),
-                2 => UpdateMoveUI("##0.##", tf.localScale),
-                _ => F.DoNothing.Ignoring<GameObject>()
-            })(ui.gameObject));
+        static void UpdateMoveUI(Transform tf, MoveGroup[] moves) => tf
+            .With(UpdatePosition(moves[0].gameObject))
+            .With(UpdateRotation(moves[1].gameObject))
+            .With(UpdateScale(moves[2].gameObject));
+        static Action<Transform> UpdatePosition(GameObject go) => tf =>
+            go.gameObject.With(UpdateMoveUI("0.#", tf.localPosition * 100.0f));
+        static Action<Transform> UpdateRotation(GameObject go) => tf =>
+            go.gameObject.With(UpdateMoveUI("0", tf.localEulerAngles));
+        static Action<Transform> UpdateScale(GameObject go) => tf =>
+            go.gameObject.With(UpdateMoveUI("0.##", tf.localScale));
         static Action<GameObject> UpdateMoveUI(string format, Vector3 values) => go =>
             go.With(
                 UGUI.ModifyAt("Controller", "Move", "X", "InputField_Decimal")
-                    (UGUI.Cmp<TMP_InputField>(ui => ui.SetText(values.x.ToString(format)))) +
+                    (UGUI.Cmp<TMP_InputField>(ui => ui.SetText(values.x.ToString(format), false))) +
                 UGUI.ModifyAt("Controller", "Move", "Y", "InputField_Decimal")
-                    (UGUI.Cmp<TMP_InputField>(ui => ui.SetText(values.y.ToString(format)))) +
+                    (UGUI.Cmp<TMP_InputField>(ui => ui.SetText(values.y.ToString(format), false))) +
                 UGUI.ModifyAt("Controller", "Move", "Z", "InputField_Decimal")
-                    (UGUI.Cmp<TMP_InputField>(ui => ui.SetText(values.z.ToString(format)))));
+                    (UGUI.Cmp<TMP_InputField>(ui => ui.SetText(values.z.ToString(format), false))));
     }
     internal static partial class Hooks
     {
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPostfix, HarmonyWrapSafe]
+        [HarmonyPatch(typeof(AccessoryMoveWindow), nameof(AccessoryMoveWindow.UpdateCustomUI), [])]
+        static void AccessoryMoveWindowUpdateCustomUIPostfix(AccessoryMoveWindow __instance) =>
+            AccessoryExtensions.Bypass(__instance.PrepareMoveEvents, __instance._slotNo);
+    }
+    static partial class AccessoryExtensions
+    {
+        internal static void PrepareMoveEvents(this AccessoryMoveWindow ui) =>
+            ui._humanAcs.accessories[ui._slotNo].objAcsMove[ui._editNo]
+                .With(PreparePositionEvent(ui._movePairs[0]._moveGroup, ui._disposables))
+                .With(PrepareRotationEvent(ui._movePairs[1]._moveGroup, ui._disposables))
+                .With(PrepareScaleEvent(ui._movePairs[2]._moveGroup, ui._disposables));
+        static Action<Transform> PreparePositionEvent(MoveGroup ui, CompositeDisposable disps) => tf =>
+            tf.With(UpdatePosition(ui.gameObject.With(UpdateMoveEvents(disps, "0",
+                (value) => tf.localPosition = new(value / 100f, tf.localPosition.y, tf.localPosition.z),
+                (value) => tf.localPosition = new(tf.localPosition.x, value / 100f, tf.localPosition.z),
+                (value) => tf.localPosition = new(tf.localPosition.x, tf.localPosition.y, value / 100f)))));
+        static Action<Transform> PrepareRotationEvent(MoveGroup ui, CompositeDisposable disps) => tf =>
+            tf.With(UpdateRotation(ui.gameObject.With(UpdateMoveEvents(disps, "0",
+                (value) => tf.localEulerAngles = new(value, tf.localEulerAngles.y, tf.localEulerAngles.z),
+                (value) => tf.localEulerAngles = new(tf.localEulerAngles.x, value, tf.localEulerAngles.z),
+                (value) => tf.localEulerAngles = new(tf.localEulerAngles.x, tf.localEulerAngles.y, value)))));
+        static Action<Transform> PrepareScaleEvent(MoveGroup ui, CompositeDisposable disps) => tf =>
+            tf.With(UpdateScale(ui.gameObject.With(UpdateMoveEvents(disps, "1",
+                (value) => tf.localScale = new(value, tf.localScale.y, tf.localScale.z),
+                (value) => tf.localScale = new(tf.localScale.x, value, tf.localScale.z),
+                (value) => tf.localScale = new(tf.localScale.x, tf.localScale.y, value)))));
+        static Action<GameObject> UpdateMoveEvents(CompositeDisposable disps,
+            string value, Action<float> setX, Action<float> setY, Action<float> setZ) => go => 
+            go.With(
+                UGUI.ModifyAt("Controller", "Move", "X", "InputField_Decimal")
+                    (UGUI.Cmp<TMP_InputField>(ui => disps.With(PrepareResetEvent(go, ui, "X", value))
+                        .Add(ui.onValueChanged.AsObservable().Subscribe(PrepareOnValueChanged(setX))))) +
+                UGUI.ModifyAt("Controller", "Move", "Y", "InputField_Decimal")
+                    (UGUI.Cmp<TMP_InputField>(ui => disps.With(PrepareResetEvent(go, ui, "Y", value))
+                        .Add(ui.onValueChanged.AsObservable().Subscribe(PrepareOnValueChanged(setY))))) +
+                UGUI.ModifyAt("Controller", "Move", "Z", "InputField_Decimal")
+                    (UGUI.Cmp<TMP_InputField>(ui => disps.With(PrepareResetEvent(go, ui, "Z", value))
+                        .Add(ui.onValueChanged.AsObservable().Subscribe(PrepareOnValueChanged(setZ))))));
+        static Action<CompositeDisposable> PrepareResetEvent(GameObject go, TMP_InputField text, string axis, string value) =>
+            disps => go.With(UGUI.ModifyAt("Controller", "Move", axis, "btnDefault")
+                (UGUI.Cmp<Button>(button => disps.Add(button
+                    .OnClickAsObservable().Subscribe(F.Apply(text.SetText, value, true).Ignoring<Unit>())))));
+        static Action<string> PrepareOnValueChanged(Action<float> setter) =>
+            input => float.TryParse(input, out var value).Maybe(F.Apply(setter, value));
+    }
+
+    internal static partial class Hooks
+    {
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AccessoryFKWindow), nameof(AccessoryFKWindow.UpdateCustomUI))]
         static void AccessoryFKWindowUpdateCustomUIPrefix(AccessoryFKWindow __instance) =>
             __instance._acsData
@@ -207,18 +256,15 @@ namespace VarietyOfScales
             __instance._human.data.Coordinates[__instance._human.data.Status.coordinateType].Accessory
                 .parts[__instance._slotNo].fkInfo.bones =
                 __instance._humanAcs.accessories[__instance._slotNo].objAcsFK.Select(tf => tf.localEulerAngles).ToArray();
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AccessoryFKWindow), nameof(AccessoryFKWindow.UpdateAcsAllReset))]
         static bool AccessoryFKWindowUpdateAcsAllResetPrefix(AccessoryFKWindow __instance, int slotNo, int editNo) =>
             F.Apply(__instance._humanAcs.ResetFK, slotNo, editNo).Bypass(slotNo);
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AccessoryFKWindow), nameof(AccessoryFKWindow.UpdateAcsMovePaste))]
         static bool AccessoryFKWindowUpdateAcsMovePastePrefix(AccessoryFKWindow __instance, int slotNo, int editNo, Vector3 value) =>
             F.Apply(__instance._humanAcs.SetFK, slotNo, editNo, value).Bypass(slotNo);
-        [HarmonyPrefix]
-        [HarmonyWrapSafe]
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AccessoryFKWindow), nameof(AccessoryFKWindow.UpdateAcsRotAdd))]
         static bool AccessoryFKAWindowUpdateAcsRotAddPrefix(AccessoryFKWindow __instance, int slotNo, int editNo, int xyz, bool add, float val) =>
             F.Apply(__instance._humanAcs.SetFK, slotNo, editNo, val, add, 1 << xyz).Bypass(slotNo);
@@ -242,7 +288,9 @@ namespace VarietyOfScales
             _ => RootPanel.SetActive(true);
         Action<Unit> OnHide =>
             _ => RootPanel.SetActive(false);
-        Action<Unit> RemoveAll;
+        Action<bool> OnCustomHideEvent =>
+            value => RootPanel.SetActive(!value && HumanCustom.Instance.NowCategory.Category == 4);
+        Action <Unit> RemoveAll;
         UI() => RootPanel = new GameObject(Plugin.Name)
             .With(UGUI.Go(active: false, parent: UGUI.RootCanvas))
             .With(UGUI.Cmp(UGUI.Rt(
@@ -269,7 +317,10 @@ namespace VarietyOfScales
             new GameObject("Controls").With(UGUI.Go(parent: RootPanel.transform))
                 .With(UGUI.Cmp(UGUI.LayoutGroup<HorizontalLayoutGroup>(spacing: 2)))
                 .With(PrepareDecrease).With(PrepareIncrease).With(PrepareContents)
-                .With(PrepareOpenCopy).With(PrepareRemoveAll).With(PrepareSlots);
+                .With(PrepareOpenCopy).With(PrepareRemoveAll).With(PrepareSlots)
+                .With(SubscribeHumanCustomHideUI);
+        void SubscribeHumanCustomHideUI() =>
+            HumanCustom.Instance.HideUIEvent.Subscribe(OnCustomHideEvent);
         void PrepareDecrease(GameObject parent) =>
             UGUI.Button(112, 24, "Slot-", parent)
                 .GetComponent<Button>().OnClickAsObservable().Subscribe(F.Ignoring<Unit>(Decrease));
@@ -381,6 +432,11 @@ namespace VarietyOfScales
     }
     internal static partial class Hooks
     {
+        [HarmonyPrefix]
+        [HarmonyWrapSafe]
+        [HarmonyPatch(typeof(Accessory_00), nameof(Accessory_00.UpdateAccessory))]
+        static void UpdateAccessoryPrefix(bool setDefaultColor) =>
+            HumanCustom.Instance.Human._isLoadWithDefaultColorAndPtn = setDefaultColor;
         [HarmonyPostfix]
         [HarmonyWrapSafe]
         [HarmonyPatch(typeof(Accessory_00), nameof(Accessory_00.UpdateCustomUI), [])]

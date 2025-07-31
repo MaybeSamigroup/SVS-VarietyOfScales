@@ -9,9 +9,7 @@ plugin to extend accessory slots, for SamabakeScramble and DigitalCraft
   - BepInEx.ConfigurationManager
   - SVS_BepisPlugins
 - [Fishbone/CoastalSmell](https://github.com/MaybeSamigroup/SVS-Fishbone)
-  - 2.1.2/1.0.4 or later
-- [SardineTail](http://github.com/MaybeSamigroup/SVS-SardineTail)
-  - 1.1.2
+  - 2.2.0/1.0.5 or later
 
 Confirmed working under SamabakeScramble 1.1.6 and DigitalCraft 2.0.0
 
