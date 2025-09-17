@@ -4,7 +4,6 @@ using BepInEx.Configuration;
 using System;
 using System.Linq;
 using System.Collections.Generic;
-using System.IO.Compression;
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
@@ -20,8 +19,6 @@ using Parent = ChaAccessoryDefine.AccessoryParentKey;
 using AcsNode = Character.HumanAccessory;
 using AcsData = Character.HumanDataAccessory;
 using AcsPart = Character.HumanDataAccessory.PartsInfo;
-using CharaLimit = Character.HumanData.LoadLimited.Flags;
-using CoordLimit = Character.HumanDataCoordinate.LoadLimited.Flags;
 using Cysharp.Threading.Tasks;
 
 namespace VarietyOfScales
@@ -56,7 +53,7 @@ namespace VarietyOfScales
         static bool SetColorPtnWindowPrefix(PatternEdit __instance, int slotNo, int index, ThumbnailColor ptnColor, Il2CppSystem.Func<bool> updateUI) =>
             F.Apply(ptnColor.InitPtn, __instance._humanAcs, slotNo, index, updateUI).Bypass(slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static void InitAcs(this ThumbnailColor ui, AcsNode node, int slot, int index, Il2CppSystem.Func<bool> updateUI) =>
             ui.Initialize($"Slot{slot + 1}/Color{index}",
@@ -130,7 +127,7 @@ namespace VarietyOfScales
             (resetValue, ParameterIndex) = (
                 PatternReset(ParameterIndex, resetValue.Invoke), ParameterIndex + 1.With(() => Plugin.Instance.Log.LogInfo("isb init")));
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static bool CheckEditTitles(this string[] titles) =>
             3 == titles.Length
@@ -155,14 +152,14 @@ namespace VarietyOfScales
         [HarmonyPatch(typeof(ParentEdit), nameof(ParentEdit.ChangeAccessoryParent), typeof(int))]
         static bool ChangeAccessoryParentPrefix(ParentEdit __instance, int slotNo) =>
             F.Apply(__instance._humanAcs.ChangeParent, __instance._acsData,
-                slotNo, __instance._accessoryParentWindow._toggleGroup.GetOnBit()).Bypass(slotNo);
+                slotNo, __instance._accessoryParentWindow.CurrentSelection()).Bypass(slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
-        static Parent ToggleBitsToParent(int bits, int value = 0) =>
-            bits == 0 ? (Parent)AccessoryParentWindow._accessoryParentKeys[value] : ToggleBitsToParent(bits >> 1, value + 1);
-        internal static void ChangeParent(this AcsNode node, AcsData data, int slot, int bits) =>
-            node.ChangeParent(slot, ToggleBitsToParent(bits).With(data.parts[slot].ChangeParent));
+        internal static Parent CurrentSelection(this AccessoryParentWindow ui) =>
+            Enum.TryParse<Parent>(ui._toggleGroup.onList.ToArray().Last().name.Split("_").Last(), out var value) ? value + 1 : Parent.RootBone; 
+        internal static void ChangeParent(this AcsNode node, AcsData data, int slot, Parent parent) =>
+            node.ChangeParent(slot, parent.With(data.parts[slot].ChangeParent));
     }
     internal static partial class Hooks
     {
@@ -172,7 +169,7 @@ namespace VarietyOfScales
             F.Apply(__instance._humanAcs.UpdateMoveUI, slotNo, editNo, __instance._guidList[editNo],
                 __instance._movePairs.Where(pair => pair.Active).Select(pair => pair.MoveGroup).ToArray()).Bypass(slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static void UpdateMoveUI(this AcsNode node, int slot, int index, GuideObject guide, MoveGroup[] moves) =>
             UpdateMoveUI(node.accessories[slot].objAcsMove[index].With(guide.Amount.Set), moves);
@@ -200,9 +197,9 @@ namespace VarietyOfScales
         [HarmonyPostfix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AccessoryMoveWindow), nameof(AccessoryMoveWindow.UpdateCustomUI), [])]
         static void AccessoryMoveWindowUpdateCustomUIPostfix(AccessoryMoveWindow __instance) =>
-            AccessoryExtensions.Bypass(__instance.PrepareMoveEvents, __instance._slotNo);
+            AccessoryExtension.Bypass(__instance.PrepareMoveEvents, __instance._slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static void PrepareMoveEvents(this AccessoryMoveWindow ui) =>
             ui._humanAcs.accessories[ui._slotNo].objAcsMove[ui._editNo]
@@ -269,7 +266,7 @@ namespace VarietyOfScales
         static bool AccessoryFKAWindowUpdateAcsRotAddPrefix(AccessoryFKWindow __instance, int slotNo, int editNo, int xyz, bool add, float val) =>
             F.Apply(__instance._humanAcs.SetFK, slotNo, editNo, val, add, 1 << xyz).Bypass(slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static void ResetFK(this AcsNode node, int slot, int index) =>
             node.SetFK(slot, index, node.accessories[slot].cusAcsCmp.GetFKBonesDef()[index]);
@@ -411,24 +408,12 @@ namespace VarietyOfScales
             {
                 Util.OnCustomHumanReady(InitializeUI);
                 RemoveAllEvent = HumanCustom.Instance.SelectionTop.OnAccessoryAllRemove().Subscribe(PrepareEvents);
-                Event.OnPreCoordinateReload += OnPreCoordinateReload;
-                Event.OnCoordinateSerialize += OnCoordinateSerialize;
-                Event.OnCharacterSerialize += OnCharacterSerialize; 
             }, () =>
             {
                 Instance = null;
                 RemoveAllEvent.Dispose();
-                Event.OnPreCoordinateReload -= OnPreCoordinateReload;
-                Event.OnCoordinateSerialize -= OnCoordinateSerialize;
-                Event.OnCharacterSerialize -= OnCharacterSerialize; 
             });
         }
-        static void OnCoordinateSerialize(HumanDataCoordinate _, ZipArchive archive) =>
-            CoordMods.ToMod(HumanCustom.Instance.Human).Save(archive);
-        static void OnCharacterSerialize(HumanData _, ZipArchive archive) =>
-            CharaMods.Load(archive).With(mods => mods.Store(HumanCustom.Instance.Human)).Save(archive); 
-        static void OnPreCoordinateReload(Human human, int type, ZipArchive archive) =>
-            CharaMods.Load(archive).With(mods => mods.Store(human)).Save(archive);
     }
     internal static partial class Hooks
     {
@@ -443,35 +428,29 @@ namespace VarietyOfScales
         static void UpdateCustomUIPostfix() =>
             UI.UpdateSlotTitles();
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static int ExtensionSlots => UI.ExtensionSlots;
-        static void OnPostCoordinateDeserialize(Human human, HumanDataCoordinate _, CoordLimit limit, ZipArchive archive, ZipArchive storage) =>
-            ((limit & CoordLimit.Accessory) != 0).Maybe(F.Apply(CoordMods.Apply, archive, human));
-        static void OnPostCharacterDeserialize(Human human, CharaLimit limit, ZipArchive archive, ZipArchive storage) =>
-            ((limit & CharaLimit.Coorde) != 0).Maybe(ApplyCharaMods.Apply(archive).Apply(storage).Apply(human));
-        static void OnPostCoordinateReload(Human human, int type, ZipArchive archive) =>
-            CharaMods.Load(archive).Apply(human, type);
-        static void OnPostActorHumanize(SaveData.Actor _, Human human, ZipArchive archive) =>
-            CharaMods.Load(archive).Apply(human, human.data.Status.coordinateType);
-        internal static Action<ZipArchive, ZipArchive, Human> ApplyCharaMods =
-            (archive, storage, human) => CharaMods.Load(archive)
-                .With(mods => mods.Save(storage)).Apply(human, human.data.Status.coordinateType);
         static bool GetInfo(Human _, ChaListDefine.CategoryNo category, int id, ChaListDefine.KeyType key, out string value) =>
             Human.lstCtrl.GetInfo(category, id, key, out value);
-        internal static void Initialize()
-        {
-            Event.OnPostCoordinateDeserialize += OnPostCoordinateDeserialize;
-            Event.OnPostCharacterDeserialize += OnPostCharacterDeserialize;
-            Event.OnPostCoordinateReload += OnPostCoordinateReload;
-            Event.OnPostActorHumanize += OnPostActorHumanize;
-        }
+        internal static void SaveCustomChara() =>
+            CharaMods.Store(HumanCustom.Instance.Human);
+        internal static void SaveCustomCoord() =>
+            CoordMods.Store(HumanCustom.Instance.Human);
     }
     public partial class Plugin : BasePlugin
     {
         public const string Process = "SamabakeScramble";
-        public override void Load() =>
-            ((Instance, Patch) = (this, Harmony.CreateAndPatchAll(typeof(Hooks), $"{Name}.Hooks")))
-                .With(UI.Initialize).With(AccessoryExtensions.Initialize);
+        public override void Load()
+        {
+            Instance = this;
+            Patch = Harmony.CreateAndPatchAll(typeof(Hooks), $"{Name}.Hooks");
+            Extension.Register<CharaMods, CoordMods>();
+            Extension.OnLoadChara += CharaMods.Apply;
+            Extension.OnLoadCoord += CoordMods.Apply;
+            Extension.PrepareSaveChara += AccessoryExtension.SaveCustomChara;
+            Extension.PrepareSaveCoord += AccessoryExtension.SaveCustomCoord;
+            UI.Initialize();
+        }
     }
 }

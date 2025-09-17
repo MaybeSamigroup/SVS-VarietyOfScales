@@ -4,7 +4,6 @@ using BepInEx.Unity.IL2CPP;
 using System;
 using System.Linq;
 using System.Collections.Generic;
-using System.IO.Compression;
 using UnityEngine;
 using UniRx;
 using Character;
@@ -15,6 +14,8 @@ using AcsNode = Character.HumanAccessory;
 using AcsLeaf = Character.HumanAccessory.Accessory;
 using AcsData = Character.HumanDataAccessory;
 using AcsPart = Character.HumanDataAccessory.PartsInfo;
+using CharaLimit = Character.HumanData.LoadLimited.Flags;
+using CoordLimit = Character.HumanDataCoordinate.LoadLimited.Flags;
 using IlVector3Array = Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppStructArray<UnityEngine.Vector3>;
 
 namespace VarietyOfScales
@@ -41,8 +42,8 @@ namespace VarietyOfScales
         void Apply(AcsLeaf leaf) =>
             leaf.objAcsMove.ForEachIndex((tf, index) => Moves.ElementAtOrDefault(index).Apply(tf));
         Action<AcsNode> Apply(AcsPart part, int slot) => node =>
-            node.ChangeAccessory(slot, part.type, part.id, (Parent)part.parentKeyType, true);
-
+            (part.type is not (int)ChaListDefine.CategoryNo.ao_none)
+                .Maybe(F.Apply(node.ChangeAccessory, slot, part.type, part.id, (Parent)part.parentKeyType, true));
         AcsPart ToTargetPart(HumanData data, int slot) =>
             data.Coordinates[data.Status.coordinateType].Accessory.parts[slot]; 
         internal void Apply(Human human, int slot) =>
@@ -53,53 +54,68 @@ namespace VarietyOfScales
             Moves = leaf.objAcsMove.Select(Move.ToMod).ToList()
         };
     }
-    [BonesToStuck(Plugin.Name, "modifications.json")]
-    public class CoordMods
+    public class CoordMods : CoordinateExtension<CoordMods>
     {
         public List<MoveMod> MoveMods { get; set; }
         public CoordMods() => MoveMods = new();
-        void ApplyMoves(Human human) =>
+        public CoordMods Merge(CoordLimit limit, CoordMods mods) =>
+            (limit & CoordLimit.Accessory) is CoordLimit.None ? this : mods;
+        internal void ApplyMods(Human human) =>
             MoveMods.ForEachIndex((mods, index) => mods.Apply(human, index + 20));
-        internal void Apply(Human human) =>
-            human.With(ApplyMoves);
-        internal static CoordMods ToMod(Human human) => new()
+        internal static void Apply(Human human) =>
+            Extension.Coord<CharaMods, CoordMods>(human).ApplyMods(human);
+
+        internal static CoordMods ToMods(Human human) => new()
         {
             MoveMods = Enumerable.Range(20, human.acs.accessories.Count - 20)
                 .Select(slot => human.acs.accessories[slot])
                 .Select(MoveMod.ToMod).ToList()
         };
-        internal void Save(ZipArchive archive) =>
-            BonesToStuck<CoordMods>.Save(archive, this);
-        internal static void Apply(ZipArchive archive, Human human) =>
-            Load(archive).Apply(human);
-        internal static Func<ZipArchive, CoordMods> Load =
-            archive => BonesToStuck<CoordMods>.Load(archive, out var mods) ? mods : new();
+        internal static void Store(Human human) =>
+            Store(ToMods(human), Extension.Coord<CharaMods, CoordMods>(human));
+        static void Store(CoordMods src, CoordMods dst) =>
+            dst.MoveMods = src.MoveMods;
+
     }
-    [BonesToStuck(Plugin.Name, "modifications.json")]
-    public class CharaMods
+    [Extension<CharaMods,CoordMods>(Plugin.Name, "modifications.json")]
+    public class CharaMods : CharacterExtension<CharaMods>, ComplexExtension<CharaMods, CoordMods>
     {
         public Dictionary<int, CoordMods> Coordinates { get; set; }
         public CharaMods() => Coordinates = new();
-        void ApplyMods(Human human, int coordinateType) =>
-            Coordinates.TryGetValue(coordinateType, out var mods)
-                .Maybe(F.Apply(mods.Apply, human));
         int ExtensionSlots =>
             Coordinates.Values
                 .Select(mods => mods.MoveMods.Count)
-                .Append(AccessoryExtensions.ExtensionSlots).Max();
+                .Append(AccessoryExtension.ExtensionSlots).Max();
+        void ApplyMods(Human human, int coordinateType) =>
+            Coordinates.TryGetValue(coordinateType, out var mods)
+                .Maybe(F.Apply(mods.ApplyMods, human));
         void Prepare(Human human) =>
             Enumerable.Repeat(human.Increase,
                 Math.Max(0, ExtensionSlots + 20 - human.acs.accessories.Count))
                 .Aggregate(F.DoNothing, (fst, snd) => fst + snd)();
-        internal void Apply(Human human, int coordinateType) =>
+        void Apply(Human human, int coordinateType) =>
             Coordinates.With(F.Apply(Prepare, human)).ContainsKey(coordinateType)
                 .Either(human.CleanupExtensions, F.Apply(ApplyMods, human, coordinateType));
-        internal void Store(Human human) =>
-            Coordinates[human.data.Status.coordinateType] = CoordMods.ToMod(human);
-        internal void Save(ZipArchive archive) =>
-            BonesToStuck<CharaMods>.Save(archive, this);
-        internal static Func<ZipArchive, CharaMods> Load =
-            archive => BonesToStuck<CharaMods>.Load(archive, out var mods) ? mods : new();
+        internal static void Apply(Human human) =>
+            (!human.isReloading).Either(F.Apply(Extension.Chara<CharaMods, CoordMods>(human).Apply, human, human.data.Status.coordinateType),
+                Util.DoNextFrame.Apply(F.Apply(Extension.Chara<CharaMods, CoordMods>(human).Apply, human, human.data.Status.coordinateType)));
+        internal static void Store(Human human) =>
+            Extension.Chara<CharaMods, CoordMods>(human)
+                .Coordinates[human.data.Status.coordinateType] = CoordMods.ToMods(human);
+
+        public CharaMods Merge(CharaLimit limit, CharaMods mods) =>
+            (limit & CharaLimit.Coorde) is CharaLimit.None ? this : mods;
+
+        public CoordMods Get(int coordinateType) =>
+            Coordinates?.GetValueOrDefault(coordinateType) ?? new();
+
+        public CharaMods Merge(int coordinateType, CoordMods mods) =>
+            new()
+            {
+                Coordinates = Coordinates.Where(entry => coordinateType != entry.Key)
+                    .Select(entry => new Tuple<int, CoordMods>(entry.Key, entry.Value))
+                    .Append(new(coordinateType, mods)).ToDictionary()
+            };
     }
     internal static partial class Hooks
     {
@@ -118,6 +134,7 @@ namespace VarietyOfScales
                 (false, true) => Enumerable.Repeat(dst.Increase, src.showAccessory.Count - dst.showAccessory.Count),
                 _ => []
             }).Aggregate(F.DoNothing, (fst, snd) => fst + snd)();
+
         [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(HumanData), nameof(HumanData.Copy))]
         [HarmonyPatch(typeof(HumanData), nameof(HumanData.CopyLimited))]
@@ -131,7 +148,7 @@ namespace VarietyOfScales
                 _ => []
             }).Aggregate(F.DoNothing, (fst, snd) => fst + snd)();
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static T Bypass<T>(this Func<T> action, int slotNo) =>
             slotNo < ChaFileDefine.AccessorySlotNum ? default : action();
@@ -176,10 +193,12 @@ namespace VarietyOfScales
         static bool GetAccessoryDefaultColorDataPrefix(AcsNode __instance, int slotNo, ref AcsNode.DefaultColorData __result) =>
             null == (__result = F.Apply(__instance.GetDefaultColorData, slotNo).Bypass(slotNo));
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static AcsNode.DefaultColorData GetDefaultColorData(this AcsNode node, int slot) =>
-            node.accessories[slot].cusAcsCmp == null ? new AcsNode.DefaultColorData() : new AcsNode.DefaultColorData(node.accessories[slot].cusAcsCmp);
+            node.accessories[slot].cusAcsCmp == null
+                ? new AcsNode.DefaultColorData()
+                : new AcsNode.DefaultColorData(node.accessories[slot].cusAcsCmp);
     }
     internal static partial class Hooks
     {
@@ -188,7 +207,7 @@ namespace VarietyOfScales
         static bool ChangeAccessoryPrefix(AcsNode __instance, int slotNo, int type, int id, Parent parentKey, bool forceChange) =>
             F.Apply(__instance.Change, slotNo, type, id, parentKey, forceChange).Bypass(slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static void Change(this AcsNode node, int slot, int category, int id, Parent parent, bool force) =>
             (force || Different(node.accessories[slot].infoAccessory, node.nowCoordinate.Accessory.parts[slot], category, id))
@@ -198,7 +217,7 @@ namespace VarietyOfScales
         static void Change(AcsNode node, int slot, ChaListDefine.CategoryNo category, int no, Parent parent) =>
             Change(node, slot, category, no,
                 GetInfo(node.human, category, no, ChaListDefine.KeyType.WeightType, out var num)
-                    && int.TryParse(num, out var val) ? (Human.UseCopyWeightType)val : Human.UseCopyWeightType.None,
+                    && Enum.TryParse<Human.UseCopyWeightType>(num, out var val) ? val : Human.UseCopyWeightType.None,
                 parent is Parent.none
                     && GetInfo(node.human, category, no, ChaListDefine.KeyType.Parent, out var value)
                     && Enum.TryParse<Parent>(value, out var defaultParent) ? defaultParent : parent);
@@ -247,7 +266,7 @@ namespace VarietyOfScales
         static bool ChangeAccessoryColorPrefix(AcsNode __instance, int slotNo, ref bool __result) =>
             (__result = true) && F.Apply(__instance.ChangeColor, slotNo).Bypass(slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static void ChangeColor(this AcsNode node, int slot) =>
             Enumerable.Range(0, 4).ForEach(node.accessories[slot].ChangeColor(node.nowCoordinate.Accessory.parts[slot]));
@@ -272,7 +291,7 @@ namespace VarietyOfScales
         static bool ChangeAccessoryParentPrefix(AcsNode __instance, int slotNo, Parent parentKey, bool __result) =>
             (__result = true) && F.Apply(__instance.ChangeParent, slotNo, parentKey).Bypass(slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static void ChangeParent(this AcsNode node, int slot, Parent parent) =>
             node.accessories[slot].objAccessory.transform.SetParent(ToTransform(node.human, parent.ToString()), false);
@@ -284,14 +303,17 @@ namespace VarietyOfScales
         static bool ChangeAccessoryPatternTexturePrefix(AcsNode __instance, int slotNo, int index, bool __result) =>
             (__result = true) && F.Apply(__instance.ChangePatternTexture, slotNo, index).Bypass(slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static void ChangePatternTexture(this AcsNode node, int slot, int index) =>
-            (index < 0).Either(ChangePatternTexture(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot], node.human).Apply(index),
-                F.Apply(F.ForEach, Enumerable.Range(0, 3), ChangePatternTexture(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot], node.human)));
+            (index < 0).Either(
+                ChangePatternTexture(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot], node.human).Apply(index),
+                F.Apply(F.ForEach, Enumerable.Range(0, 3),
+                    ChangePatternTexture(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot], node.human)));
         static Action<int> ChangePatternTexture(AcsLeaf leaf, AcsPart part, Human human) => index =>
             (leaf.cusAcsCmp != null && leaf.cusAcsCmp.HasPattern(index))
-                .Maybe(F.Apply(ChangePatternTexture, leaf.renderers.ToArray(), ChaShader.Accessory.GetPatternMaskID(index), human, part, index));
+                .Maybe(F.Apply(ChangePatternTexture, leaf.renderers.ToArray(),
+                    ChaShader.Accessory.GetPatternMaskID(index), human, part, index));
         static void ChangePatternTexture(Renderer[] renderers, int shaderId, Human human, AcsPart part, int index) =>
             ChangeTexture(renderers, shaderId, ToPatternTexture(human, part.colorInfo[index].pattern));
         static Texture2D ToPatternTexture(Human human, int id) =>
@@ -306,11 +328,13 @@ namespace VarietyOfScales
         static bool ChangeAccessoryPatternColorPrefix(AcsNode __instance, int slotNo, int index, ref bool __result) =>
             (__result = true) && F.Apply(__instance.ChangePatternColor, slotNo, index).Bypass(slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static void ChangePatternColor(this AcsNode node, int slot, int index) =>
-            (index < 0).Either(ChangePatternColor(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot]).Apply(index),
-                F.Apply(F.ForEach, Enumerable.Range(0, 3), ChangePatternColor(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot])));
+            (index < 0).Either(
+                ChangePatternColor(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot]).Apply(index),
+                F.Apply(F.ForEach, Enumerable.Range(0, 3),
+                    ChangePatternColor(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot])));
         static Action<int> ChangePatternColor(AcsLeaf leaf, AcsPart part) => index =>
             leaf.cusAcsCmp.HasPattern(index).Maybe(F.Apply(ChangeColor,
                 leaf.renderers.ToArray(), ChaShader.Accessory.GetPatternColorID(index), part.colorInfo[index].patternColor));
@@ -322,11 +346,13 @@ namespace VarietyOfScales
         static bool ChangeAccessoryPatternParameter(AcsNode __instance, int slotNo, int index, bool __result) =>
             (__result = true) && F.Apply(__instance.ChangePatternParams, slotNo, index).Bypass(slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static void ChangePatternParams(this AcsNode node, int slot, int index) =>
-            (index < 0).Either(ChangePatternParams(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot]).Apply(index),
-                F.Apply(F.ForEach, Enumerable.Range(0, 3), ChangePatternParams(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot])));
+            (index < 0).Either(
+                ChangePatternParams(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot]).Apply(index),
+                F.Apply(F.ForEach, Enumerable.Range(0, 3),
+                    ChangePatternParams(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot])));
         static Action<int> ChangePatternParams(AcsLeaf leaf, AcsPart part) => index =>
             ChangePatternParams(leaf, ToParams(leaf.cusAcsCmp, part, index));
         static Tuple<int, float>[] ToParams(ChaAccessoryComponent cmp, AcsPart part, int index) =>
@@ -359,7 +385,7 @@ namespace VarietyOfScales
         static bool SetAccessorySclPrefix(AcsNode __instance, int slotNo, int correctNo, float value, bool add, int flag) =>
             F.Apply(__instance.SetScale, slotNo, correctNo, value, add, flag).Bypass(slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static void SetPosition(this AcsNode node, int slot, int correctNo, float value, bool add, int flag) =>
             (correctNo < node.accessories[slot].objAcsMove.Count)
@@ -408,7 +434,7 @@ namespace VarietyOfScales
         static bool SetupAccessoryFKPrefix(AcsNode __instance, int slotNo) =>
             F.Apply(__instance.SetupFK, slotNo).Bypass(slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static void SetupFK(this AcsNode node, int slot) =>
             SetupFK(node.accessories[slot], node.nowCoordinate.Accessory.parts[slot]);
@@ -428,7 +454,7 @@ namespace VarietyOfScales
         static bool UpdateAccessoryFKPrefix(AcsNode __instance, int slotNo) =>
             F.Apply(__instance.UpdateFK, slotNo).Bypass(slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static void UpdateFK(this AcsNode node, int slot, IlVector3Array values) =>
             (values != null).Maybe(F.Apply(node.accessories[slot].cusAcsCmp.UpdateFK, values));
@@ -444,7 +470,7 @@ namespace VarietyOfScales
         static bool SetAccessoryFKPrefix(AcsNode __instance, int slotNo, int correctNo, float value, bool add, int flag) =>
             F.Apply(__instance.SetFK, slotNo, correctNo, value, add, flag).Bypass(slotNo);
     }
-    static partial class AccessoryExtensions
+    static partial class AccessoryExtension
     {
         internal static void SetFK(this AcsNode node, int slot, int correctNo, float value, bool add, int flag) =>
             SetFK(node.accessories[slot], node.nowCoordinate.Accessory.parts[slot], correctNo, value, add, flag);
