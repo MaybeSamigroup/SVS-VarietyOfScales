@@ -496,7 +496,7 @@ namespace VarietyOfScales
         internal static Plugin Instance;
         public const string Name = "VarietyOfScales";
         public const string Guid = $"{Process}.{Name}";
-        public const string Version = "0.2.0";
+        public const string Version = "0.2.1";
         private Harmony Patch;
         public override bool Unload() =>
                 true.With(Patch.UnpatchSelf) && base.Unload();
