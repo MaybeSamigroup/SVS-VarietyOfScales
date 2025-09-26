@@ -39,32 +39,28 @@ namespace VarietyOfScales
     public class MoveMod
     {
         public List<Move> Moves { get; set; }
-        void Apply(AcsLeaf leaf) =>
-            leaf.objAcsMove.ForEachIndex((tf, index) => Moves.ElementAtOrDefault(index).Apply(tf));
-        Action<AcsNode> Apply(AcsPart part, int slot) => node =>
-            (part.type is not (int)ChaListDefine.CategoryNo.ao_none)
-                .Maybe(F.Apply(node.ChangeAccessory, slot, part.type, part.id, (Parent)part.parentKeyType, true));
-        AcsPart ToTargetPart(HumanData data, int slot) =>
-            data.Coordinates[data.Status.coordinateType].Accessory.parts[slot]; 
+        void Apply(AcsNode node, AcsPart part, int slot) =>
+            node.With(F.Apply(node.ChangeAccessory, slot, part.type, part.id, (Parent)part.parentKeyType, true))
+                .accessories[slot].objAcsMove.ForEachIndex((tf, index) => Moves.ElementAtOrDefault(index).Apply(tf));
         internal void Apply(Human human, int slot) =>
-            Apply(human.acs.With(Apply(ToTargetPart(human.data, slot), slot)).accessories[slot]);
-        internal static readonly MoveMod Default = new MoveMod { Moves = new() };
+            Apply(human.acs, human.data.Coordinates[human.data.Status.coordinateType].Accessory.parts[slot], slot);
         internal static MoveMod ToMod(AcsLeaf leaf) => new()
         {
             Moves = leaf.objAcsMove.Select(Move.ToMod).ToList()
         };
+        internal static readonly MoveMod Default = new MoveMod { Moves = new() };
     }
     public class CoordMods : CoordinateExtension<CoordMods>
     {
         public List<MoveMod> MoveMods { get; set; }
-        public CoordMods() => MoveMods = new();
+        public CoordMods() => MoveMods =
+            Enumerable.Range(0, AccessoryExtension.ExtensionSlots).Select(_ => MoveMod.Default).ToList();
         public CoordMods Merge(CoordLimit limit, CoordMods mods) =>
             (limit & CoordLimit.Accessory) is CoordLimit.None ? this : mods;
         internal void ApplyMods(Human human) =>
             MoveMods.ForEachIndex((mods, index) => mods.Apply(human, index + 20));
         internal static void Apply(Human human) =>
             Extension.Coord<CharaMods, CoordMods>(human).ApplyMods(human);
-
         internal static CoordMods ToMods(Human human) => new()
         {
             MoveMods = Enumerable.Range(20, human.acs.accessories.Count - 20)
@@ -72,12 +68,10 @@ namespace VarietyOfScales
                 .Select(MoveMod.ToMod).ToList()
         };
         internal static void Store(Human human) =>
-            Store(ToMods(human), Extension.Coord<CharaMods, CoordMods>(human));
-        static void Store(CoordMods src, CoordMods dst) =>
-            dst.MoveMods = src.MoveMods;
-
+            Extension.Coord<CharaMods, CoordMods>(human, ToMods(human));
+        internal static readonly CoordMods Default = new();
     }
-    [Extension<CharaMods,CoordMods>(Plugin.Name, "modifications.json")]
+    [Extension<CharaMods, CoordMods>(Plugin.Name, "modifications.json")]
     public class CharaMods : CharacterExtension<CharaMods>, ComplexExtension<CharaMods, CoordMods>
     {
         public Dictionary<int, CoordMods> Coordinates { get; set; }
@@ -86,22 +80,14 @@ namespace VarietyOfScales
             Coordinates.Values
                 .Select(mods => mods.MoveMods.Count)
                 .Append(AccessoryExtension.ExtensionSlots).Max();
-        void ApplyMods(Human human, int coordinateType) =>
-            Coordinates.TryGetValue(coordinateType, out var mods)
-                .Maybe(F.Apply(mods.ApplyMods, human));
-        void Prepare(Human human) =>
+
+        void PrepareHuman(Human human) =>
             Enumerable.Repeat(human.Increase,
                 Math.Max(0, ExtensionSlots + 20 - human.acs.accessories.Count))
                 .Aggregate(F.DoNothing, (fst, snd) => fst + snd)();
-        void Apply(Human human, int coordinateType) =>
-            Coordinates.With(F.Apply(Prepare, human)).ContainsKey(coordinateType)
-                .Either(human.CleanupExtensions, F.Apply(ApplyMods, human, coordinateType));
-        internal static void Apply(Human human) =>
-            (!human.isReloading).Either(F.Apply(Extension.Chara<CharaMods, CoordMods>(human).Apply, human, human.data.Status.coordinateType),
-                Util.DoNextFrame.Apply(F.Apply(Extension.Chara<CharaMods, CoordMods>(human).Apply, human, human.data.Status.coordinateType)));
-        internal static void Store(Human human) =>
-            Extension.Chara<CharaMods, CoordMods>(human)
-                .Coordinates[human.data.Status.coordinateType] = CoordMods.ToMods(human);
+
+        internal static void Prepare(Human human) =>
+            Extension.Chara<CharaMods, CoordMods>(human).PrepareHuman(human);
 
         public CharaMods Merge(CharaLimit limit, CharaMods mods) =>
             (limit & CharaLimit.Coorde) is CharaLimit.None ? this : mods;
@@ -109,24 +95,34 @@ namespace VarietyOfScales
         public CoordMods Get(int coordinateType) =>
             Coordinates?.GetValueOrDefault(coordinateType) ?? new();
 
-        public CharaMods Merge(int coordinateType, CoordMods mods) =>
-            new()
-            {
-                Coordinates = Coordinates.Where(entry => coordinateType != entry.Key)
-                    .Select(entry => new Tuple<int, CoordMods>(entry.Key, entry.Value))
-                    .Append(new(coordinateType, mods)).ToDictionary()
-            };
+        public CharaMods Merge(int coordinateType, CoordMods mods) => new()
+        {
+            Coordinates = Coordinates.Merge(coordinateType, mods)
+        };
     }
     internal static partial class Hooks
     {
+
+        [HarmonyPostfix, HarmonyWrapSafe]
+        [HarmonyPatch(typeof(Human), nameof(Human.Create))]
+        static void HumanCreatePostfix(Human __result) =>
+            CoordMods.Apply(__result);
+
+        [HarmonyPostfix, HarmonyWrapSafe]
+        [HarmonyPatch(typeof(Human), nameof(Human.Reload), [])]
+        static void HumanReloadPostfix(Human __instance) =>
+            CoordMods.Apply(__instance);
+
+        [HarmonyPostfix, HarmonyWrapSafe]
+        [HarmonyPatch(typeof(Human.Reloading), nameof(Human.Reloading.Dispose))]
+        internal static void HumanReloadingDisposePostfix(Human.Reloading __instance) =>
+            (!__instance._isReloading).Maybe(F.Apply(CoordMods.Apply, __instance._human));
+
         [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(HumanDataStatus), nameof(HumanDataStatus.Copy))]
         static void HumanDataStatusCopyPrefix(HumanDataStatus __instance, HumanDataStatus src) =>
             Adjust(__instance, src);
-        [HarmonyPrefix, HarmonyWrapSafe]
-        [HarmonyPatch(typeof(AcsData), nameof(AcsData.Copy))]
-        static void HumanDataAccessoryCopyPrefix(AcsData __instance, AcsData src) =>
-            Adjust(__instance, src);
+
         static void Adjust(HumanDataStatus dst, HumanDataStatus src) =>
             ((dst.showAccessory.Count > src.showAccessory.Count, dst.showAccessory.Count < src.showAccessory.Count) switch
             {
@@ -136,13 +132,19 @@ namespace VarietyOfScales
             }).Aggregate(F.DoNothing, (fst, snd) => fst + snd)();
 
         [HarmonyPrefix, HarmonyWrapSafe]
+        [HarmonyPatch(typeof(AcsData), nameof(AcsData.Copy))]
+        static void HumanDataAccessoryCopyPrefix(AcsData __instance, AcsData src) =>
+            Adjust(__instance, src);
+
+        [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(HumanData), nameof(HumanData.Copy))]
         [HarmonyPatch(typeof(HumanData), nameof(HumanData.CopyLimited))]
         static void HumanDataCopyPrefix(HumanData dst, HumanData src) =>
             Enumerable.Range(0, Math.Min(dst.Coordinates.Count, src.Coordinates.Count))
                 .ForEach(index => Adjust(dst.Coordinates[index].Accessory, src.Coordinates[index].Accessory));
         static void Adjust(AcsData dst, AcsData src) =>
-            ((dst.parts.Count > src.parts.Count, dst.parts.Count < src.parts.Count) switch {
+            ((dst.parts.Count > src.parts.Count, dst.parts.Count < src.parts.Count) switch
+            {
                 (true, false) => Enumerable.Repeat(src.Increase, dst.parts.Count - src.parts.Count),
                 (false, true) => Enumerable.Repeat(dst.Increase, src.parts.Count - dst.parts.Count),
                 _ => []
@@ -154,11 +156,8 @@ namespace VarietyOfScales
             slotNo < ChaFileDefine.AccessorySlotNum ? default : action();
         internal static bool Bypass(this Action action, int slotNo) =>
             slotNo < ChaFileDefine.AccessorySlotNum || false.With(action);
-        static void Dispose(this AcsNode acs, int slot) =>
-            acs.accessories[slot].Dispose();
-        internal static void CleanupExtensions(this Human human) =>
-            Enumerable.Range(20, human.acs.accessories.Count - 20)
-                .ForEach(slot => human.acs.ChangeAccessory(slot, 120, 0, Parent.RootBone, true));
+        static void Dispose(this AcsNode node, int slot) =>
+            node.accessories[slot].Dispose();
         internal static void Increase(this Human human) =>
             Increase(human.With(human.data.Increase).With(F.Apply(Increase, human.acs)).coorde.nowCoordinate);
         internal static void Decrease(this Human human) =>
@@ -209,26 +208,35 @@ namespace VarietyOfScales
     }
     static partial class AccessoryExtension
     {
+        internal static bool UpdateWithDefaultColor = false;
         internal static void Change(this AcsNode node, int slot, int category, int id, Parent parent, bool force) =>
             (force || Different(node.accessories[slot].infoAccessory, node.nowCoordinate.Accessory.parts[slot], category, id))
-                .Maybe(F.Apply(Change, node, slot, (ChaListDefine.CategoryNo)category, id, parent));
+                .Maybe(F.Apply(node.Dispose, slot) + F.Apply(Change, node, slot, (ChaListDefine.CategoryNo)category, id, parent));
         static bool Different(ListInfoBase info, AcsPart part, int category, int id) =>
             (info?.Category, info?.Id) != ((part.type, part.id) = (category, id));
-        static void Change(AcsNode node, int slot, ChaListDefine.CategoryNo category, int no, Parent parent) =>
-            Change(node, slot, category, no,
-                GetInfo(node.human, category, no, ChaListDefine.KeyType.WeightType, out var num)
-                    && Enum.TryParse<Human.UseCopyWeightType>(num, out var val) ? val : Human.UseCopyWeightType.None,
-                parent is Parent.none
-                    && GetInfo(node.human, category, no, ChaListDefine.KeyType.Parent, out var value)
-                    && Enum.TryParse<Parent>(value, out var defaultParent) ? defaultParent : parent);
-        static void Change(AcsNode node, int slot, ChaListDefine.CategoryNo category, int no, Human.UseCopyWeightType weight, Parent parent) =>
-            (node.accessories[slot.With(F.Apply(node.Dispose, slot))] =
-                new AcsLeaf(node.human, category, no, slot, weight, ToTransform(node.human, parent.ToString())))
-                .With(category is ChaListDefine.CategoryNo.ao_none
-                     ? F.Apply(PostRemove, node.nowCoordinate.Accessory.parts[slot])
-                     : F.Apply(PostChange, node.nowCoordinate.Accessory.parts[slot], node, slot, parent));
-        static Transform ToTransform(Human human, string parent) =>
-            human.GetRefTransform(Enum.TryParse<Table.RefObjKey>(parent, out var value) ? value : Table.RefObjKey.RootBone);
+        static void Change(AcsNode node, int slot, ChaListDefine.CategoryNo category, int id, Parent parent) =>
+            (category is not ChaListDefine.CategoryNo.ao_none).Either(
+                F.Apply(Remove, node, slot, category, id,
+                    parent is Parent.none ? GetDefaultParent(node.human, category, id) : parent),
+                F.Apply(node.Dispose, slot) + F.Apply(Assign, node, slot, category, id,
+                    parent is Parent.none ? GetDefaultParent(node.human, category, id) : parent));
+        static void Remove(AcsNode node, int slot, ChaListDefine.CategoryNo category, int id, Parent parent) =>
+            (node.accessories[slot] = new AcsLeaf())
+                .With(F.Apply(PostRemove, node.nowCoordinate.Accessory.parts[slot]));
+        static void Assign(AcsNode node, int slot, ChaListDefine.CategoryNo category, int id, Parent parent) =>
+            (node.accessories[slot] =
+                new AcsLeaf(node.human, category, id, slot,
+                    GetWeightType(node.human, category, id),
+                    ToTransform(node, parent.ToString())))
+                    .With(F.Apply(PostChange, node.nowCoordinate.Accessory.parts[slot], node, slot, parent));
+        static Parent GetDefaultParent(Human human, ChaListDefine.CategoryNo category, int id) =>
+            GetInfo(human, category, id, ChaListDefine.KeyType.Parent, out var value)
+                && Enum.TryParse<Parent>(value, out var defaultParent) ? defaultParent : Parent.RootBone;
+        static Human.UseCopyWeightType GetWeightType(Human human, ChaListDefine.CategoryNo category, int id) =>
+            GetInfo(human, category, id, ChaListDefine.KeyType.WeightType, out var data)
+                && Enum.TryParse<Human.UseCopyWeightType>(data, out var value) ? value : Human.UseCopyWeightType.None;
+        static Transform ToTransform(AcsNode node, string parent) =>
+            node.GetRefTransform(Enum.TryParse<Table.RefObjKey>(parent, out var value) ? value : Table.RefObjKey.RootBone);
         static void PostRemove(AcsPart part) =>
             part.Copy(AcsNode.NoneAcsData);
         static void PostChange(AcsPart part, AcsNode node, int slot, Parent parent) =>
@@ -241,10 +249,10 @@ namespace VarietyOfScales
                 .With(F.Apply(node.SetupFK, slot))
                 .ChangeParent(parent);
         static void PostChange(Human human, AcsPart part, AcsLeaf leaf) =>
-            human.IsLoadWithDefaultColorAndPtn().Maybe(F.Apply(ApplyDefaults, leaf.cusAcsCmp, part));
+            (UpdateWithDefaultColor || human.IsLoadWithDefaultColorAndPtn()).Maybe(F.Apply(ApplyDefaults, leaf.cusAcsCmp, part));
         static void ApplyDefaults(ChaAccessoryComponent cmp, AcsPart part) =>
-            (part.color[0], part.color[1], part.color[2], part.color[3]) =
-                (cmp.defColor01,
+            (UpdateWithDefaultColor, part.color[0], part.color[1], part.color[2], part.color[3]) =
+                (false, cmp.defColor01,
                     cmp.useColor01 ? cmp.defColor02 : part.color[1],
                     cmp.useColor02 ? cmp.defColor03 : part.color[2],
                     cmp.useColor03 ? cmp.defColor04 : part.color[3])
@@ -271,10 +279,10 @@ namespace VarietyOfScales
         internal static void ChangeColor(this AcsNode node, int slot) =>
             Enumerable.Range(0, 4).ForEach(node.accessories[slot].ChangeColor(node.nowCoordinate.Accessory.parts[slot]));
         static Action<int> ChangeColor(this AcsLeaf leaf, AcsPart part) => index =>
-            leaf.cusAcsCmp.HasColor(index).Maybe(F.Apply(ChangeColor,
+            (leaf.cusAcsCmp is not null && leaf.cusAcsCmp.HasColor(index)).Maybe(F.Apply(ChangeColor,
                 leaf.renderers.ToArray(), ChaShader.Accessory.GetMainColorID(index), part.color[index]));
         static void ChangeColor(Renderer[] renderers, int shaderId, Color color) =>
-            renderers.ForEach(renderer => renderer.material.SetColor(shaderId, color));
+            renderers.ForEach(renderer => renderer?.material?.SetColor(shaderId, color));
         static bool HasColor(this ChaAccessoryComponent cmp, int index) =>
             cmp != null && index switch
             {
@@ -294,7 +302,7 @@ namespace VarietyOfScales
     static partial class AccessoryExtension
     {
         internal static void ChangeParent(this AcsNode node, int slot, Parent parent) =>
-            node.accessories[slot].objAccessory.transform.SetParent(ToTransform(node.human, parent.ToString()), false);
+            node.accessories[slot].objAccessory.transform.SetParent(ToTransform(node, parent.ToString()), false);
     }
     internal static partial class Hooks
     {
@@ -306,11 +314,10 @@ namespace VarietyOfScales
     static partial class AccessoryExtension
     {
         internal static void ChangePatternTexture(this AcsNode node, int slot, int index) =>
-            (index < 0).Either(
-                ChangePatternTexture(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot], node.human).Apply(index),
-                F.Apply(F.ForEach, Enumerable.Range(0, 3),
-                    ChangePatternTexture(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot], node.human)));
-        static Action<int> ChangePatternTexture(AcsLeaf leaf, AcsPart part, Human human) => index =>
+            (index < 0 ? Enumerable.Range(0, 3) : [index]).ForEach(idx =>
+                ChangePatternTexture(node.Accessories[slot],
+                    node.nowCoordinate.Accessory.parts[slot], node.human, idx));
+        static void ChangePatternTexture(AcsLeaf leaf, AcsPart part, Human human, int index) =>
             (leaf.cusAcsCmp != null && leaf.cusAcsCmp.HasPattern(index))
                 .Maybe(F.Apply(ChangePatternTexture, leaf.renderers.ToArray(),
                     ChaShader.Accessory.GetPatternMaskID(index), human, part, index));
@@ -319,7 +326,7 @@ namespace VarietyOfScales
         static Texture2D ToPatternTexture(Human human, int id) =>
             human.GetTexture(ChaListDefine.CategoryNo.mt_pattern, id, ChaListDefine.KeyType.MainTexAB, ChaListDefine.KeyType.MainTex);
         static void ChangeTexture(Renderer[] renderers, int shaderId, Texture2D texture) =>
-            renderers.ForEach(renderer => renderer.material.SetTexture(shaderId, texture));
+            renderers.ForEach(renderer => renderer?.material?.SetTexture(shaderId, texture));
     }
     internal static partial class Hooks
     {
@@ -331,12 +338,10 @@ namespace VarietyOfScales
     static partial class AccessoryExtension
     {
         internal static void ChangePatternColor(this AcsNode node, int slot, int index) =>
-            (index < 0).Either(
-                ChangePatternColor(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot]).Apply(index),
-                F.Apply(F.ForEach, Enumerable.Range(0, 3),
-                    ChangePatternColor(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot])));
-        static Action<int> ChangePatternColor(AcsLeaf leaf, AcsPart part) => index =>
-            leaf.cusAcsCmp.HasPattern(index).Maybe(F.Apply(ChangeColor,
+            (index < 0 ? Enumerable.Range(0, 3) : [index]).ForEach(idx =>
+                ChangePatternColor(node.Accessories[slot], node.nowCoordinate.Accessory.parts[slot], idx));
+        static void ChangePatternColor(AcsLeaf leaf, AcsPart part, int index) =>
+            (leaf.cusAcsCmp != null && leaf.cusAcsCmp.HasPattern(index)).Maybe(F.Apply(ChangeColor,
                 leaf.renderers.ToArray(), ChaShader.Accessory.GetPatternColorID(index), part.colorInfo[index].patternColor));
     }
     internal static partial class Hooks
@@ -496,7 +501,7 @@ namespace VarietyOfScales
         internal static Plugin Instance;
         public const string Name = "VarietyOfScales";
         public const string Guid = $"{Process}.{Name}";
-        public const string Version = "0.2.1";
+        public const string Version = "0.2.2";
         private Harmony Patch;
         public override bool Unload() =>
                 true.With(Patch.UnpatchSelf) && base.Unload();

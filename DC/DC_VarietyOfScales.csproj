@@ -85,11 +85,11 @@
             <Private>False</Private>
         </Reference>
     </ItemGroup>
-    <Target Name="Deploy" AfterTargets="Build">
-        <Copy SourceFiles="$(OutputPath)\$(AssemblyName).dll" DestinationFolder="$(GamePath)\BepInEx\plugins\" />
-    </Target>
-    <Target Name="Release" AfterTargets="Build">
-        <Copy SourceFiles="$(OutputPath)\$(AssemblyName).dll" DestinationFolder="GameRoot\BepinEx\plugins"/>
-        <ZipDirectory SourceDirectory="GameRoot" Overwrite="true" DestinationFile="..\$(GameName).zip"/>
-    </Target>
+	<Target Name="Deploy" AfterTargets="Build">
+		<Copy SourceFiles="$(OutputPath)\$(AssemblyName).dll" DestinationFolder="$(GamePath)\BepInEx\plugins\" />
+	</Target>
+	<Target Name="Release" AfterTargets="Build">
+		<Copy SourceFiles="$(OutputPath)\$(AssemblyName).dll" DestinationFolder="..\Release\$(GameName)\BepinEx\plugins"/>
+		<ZipDirectory SourceDirectory="..\Release\$(GameName)" Overwrite="true" DestinationFile="..\$(AssemblyName).zip"/>
+	</Target>
 </Project>

@@ -13,13 +13,13 @@ using Character;
 using CharacterCreation;
 using CharacterCreation.UI;
 using CharacterCreation.UI.View.Accessory;
+using Cysharp.Threading.Tasks;
 using Fishbone;
 using CoastalSmell;
 using Parent = ChaAccessoryDefine.AccessoryParentKey;
 using AcsNode = Character.HumanAccessory;
 using AcsData = Character.HumanDataAccessory;
 using AcsPart = Character.HumanDataAccessory.PartsInfo;
-using Cysharp.Threading.Tasks;
 
 namespace VarietyOfScales
 {
@@ -30,17 +30,17 @@ namespace VarietyOfScales
         static bool GetSlotNamePrefix(int slotNo, ref string __result) =>
             (__result = HumanCustom.Instance.Human.coorde.nowCoordinate.Accessory.ToSlotName(slotNo)) == null;
     }
-    static class SlotNameExtensions
+    static class SlotNameExtension
     {
-        internal static string ToSlotName(this AcsData acs, int slotNo) =>
-            slotNo < acs.parts.Count ? ToSlotName(acs.parts[slotNo], slotNo) : HumanCustom.Instance.GetTLSlotTitle(slotNo);
-        internal static string ToSlotName(AcsPart part, int slotNo) =>
+        static string ToSlotName(AcsPart part, int slotNo) =>
             (part?.type, part?.id) switch
             {
                 (null, null) or (120, _) => HumanCustom.Instance.GetTLSlotTitle(slotNo),
                 _ => Human.lstCtrl.GetListInfo((ChaListDefine.CategoryNo)part.type, part.id)
               .GetInfo(ChaListDefine.KeyType.Name) ?? HumanCustom.Instance.GetTLSlotTitle(slotNo)
             };
+        internal static string ToSlotName(this AcsData acs, int slotNo) =>
+            slotNo < acs.parts.Count ? ToSlotName(acs.parts[slotNo], slotNo) : HumanCustom.Instance.GetTLSlotTitle(slotNo);
     }
     internal static partial class Hooks
     {
@@ -57,18 +57,22 @@ namespace VarietyOfScales
     {
         internal static void InitAcs(this ThumbnailColor ui, AcsNode node, int slot, int index, Il2CppSystem.Func<bool> updateUI) =>
             ui.Initialize($"Slot{slot + 1}/Color{index}",
-                AcsColorGetter(node.nowCoordinate.Accessory.parts[slot], index).With(getter => ui.SetColor(getter())),
+                AcsColorGetter(node.nowCoordinate.Accessory.parts[slot], index).With(ui.SetThumbnailColor),
                 ColorSetter(
                     AcsColorSetter(node.human.data, slot, index) +
                     AcsColorSetter(node.nowCoordinate.Accessory.parts[slot], index) +
                     ColorSetter(node, slot, ChaShader.Accessory.GetMainColorID(index)), updateUI), index > 2, true);
         internal static void InitPtn(this ThumbnailColor ui, AcsNode node, int slot, int index, Il2CppSystem.Func<bool> updateUI) =>
             ui.Initialize($"Slot{slot + 1}/Pattern{index}",
-                PtnColorGetter(node.nowCoordinate.Accessory.parts[slot], index).With(getter => ui.SetColor(getter())),
+                PtnColorGetter(node.nowCoordinate.Accessory.parts[slot], index).With(ui.SetThumbnailColor),
                 ColorSetter(
                     PtnColorSetter(node.human.data, slot, index) +
                     PtnColorSetter(node.nowCoordinate.Accessory.parts[slot], index) +
-                    ColorSetter(node, slot, ChaShader.Accessory.GetPatternColorID(index)), updateUI), index > 2, true);
+                    ColorSetter(node, slot, ChaShader.Accessory.GetPatternColorID(index)), updateUI), true, true);
+        static void SetThumbnailColor(this ThumbnailColor ui, Func<Color> getter) =>
+            ui.SetGraphic(getter().With(HumanCustom.Instance.ColorPicker.SetPickerColor));
+        static void SetPickerColor(this CustomColorPicker ui, Color color) =>
+            ui.SetColor(ref color);
         static Func<Color> AcsColorGetter(AcsPart part, int index) =>
             () => part.color[index];
         static Action<Color> AcsColorSetter(HumanData data, int slot, int index) =>
@@ -124,8 +128,7 @@ namespace VarietyOfScales
         [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(InputSliderButton), nameof(InputSliderButton.Initialize))]
         static void InputSliderButtonInitializePrefix(ref Il2CppSystem.Func<HumanData, float> resetValue) =>
-            (resetValue, ParameterIndex) = (
-                PatternReset(ParameterIndex, resetValue.Invoke), ParameterIndex + 1.With(() => Plugin.Instance.Log.LogInfo("isb init")));
+            (ParameterIndex, resetValue) = (ParameterIndex + 1, PatternReset(ParameterIndex, resetValue.Invoke));
     }
     static partial class AccessoryExtension
     {
@@ -134,13 +137,6 @@ namespace VarietyOfScales
                 && titles[0].Equals(CategoryEdit.CategoryData.GetTitle(CategoryEdit.CategoryData.TitleID.Kind))
                 && titles[1].Equals(CategoryEdit.CategoryData.GetTitle(CategoryEdit.CategoryData.TitleID.Color))
                 && titles[2].Equals(CategoryEdit.CategoryData.GetTitle(CategoryEdit.CategoryData.TitleID.Correct));
-        internal static void SubscribeEditCategoryChange(this CategoryEdit ui, CategoryEdit.NowCategory data) =>
-            data._onChanged += OnEditCategoryChange(ui);
-        static Action<CategoryEdit.NowCategory> OnEditCategoryChange(CategoryEdit ui) =>
-            data => (data.Sel == 2).Maybe(ui.ListupSliders);
-        static void ListupSliders(this CategoryEdit ui) =>
-            Plugin.Instance.Log.LogInfo($"Now time: {ui._parameterWindow
-                .GetComponentsInChildren<InputSliderButton>().Select(isb => isb._title._tmpText.text).Join()}");
     }
     internal static partial class Hooks
     {
@@ -298,7 +294,8 @@ namespace VarietyOfScales
                 offsetMin: new(0, 0),
                 offsetMax: new(0, 0),
                 pivot: new(0, 1))))
-            .With(UGUI.Cmp(UGUI.LayoutGroup<VerticalLayoutGroup>(spacing: 2, padding: new(5, 5, 5, 5))));
+            .With(UGUI.Cmp(UGUI.LayoutGroup<VerticalLayoutGroup>(spacing: 2, padding: new(5, 5, 5, 5))))
+            .With(F.Apply(CoordMods.Apply, HumanCustom.Instance.Human));
         UI(Il2CppSystem.IObservable<Unit> show, Il2CppSystem.IObservable<Unit> hide, Action<Unit> removeAll) : this() =>
             (_, _, RemoveAll) = (show.Subscribe(OnShow), hide.Subscribe(OnHide), removeAll);
         UI(ObservableEnableTrigger acs, GameObject index, Button button) :
@@ -384,7 +381,9 @@ namespace VarietyOfScales
         static Action<Unit> CleanupDialogEvents =
             _ => DialogEvents.Dispose();
         static Action<Unit> CleanupExtensions =
-            _ => HumanCustom.Instance.Human.CleanupExtensions();
+            _ => Enumerable.Range(20, HumanCustom.Instance.Human.acs.accessories.Count - 20)
+                .ForEach(slot => HumanCustom.Instance.Human.acs.ChangeAccessory(slot,
+                    (int)ChaListDefine.CategoryNo.ao_none, 0, Parent.RootBone, true));
         static void PrepareDialogAccept((Button, Button) buttons) =>
             DialogEvents.Add(buttons.Item1.OnClickAsObservable().Subscribe(CleanupExtensions + CleanupDialogEvents));
         static void PrepareDialogCancel((Button, Button) buttons) =>
@@ -399,7 +398,7 @@ namespace VarietyOfScales
         static (Button, Button) ToDialogButtons(Transform tf) =>
             (tf.Find("btnEnter").gameObject.GetComponent<Button>(), tf.Find("btnCancel").gameObject.GetComponent<Button>());
         static void InitializeUI() =>
-          Instance = new UI(HumanCustom.Instance.SelectionTop.transform.Find("04_Accessories"));
+            Instance = new UI(HumanCustom.Instance.SelectionTop.transform.Find("04_Accessories"));
         static ConfigEntry<int> CustomExtensions;
         internal static void Initialize()
         {
@@ -421,7 +420,8 @@ namespace VarietyOfScales
         [HarmonyWrapSafe]
         [HarmonyPatch(typeof(Accessory_00), nameof(Accessory_00.UpdateAccessory))]
         static void UpdateAccessoryPrefix(bool setDefaultColor) =>
-            HumanCustom.Instance.Human._isLoadWithDefaultColorAndPtn = setDefaultColor;
+            AccessoryExtension.UpdateWithDefaultColor = setDefaultColor;
+
         [HarmonyPostfix]
         [HarmonyWrapSafe]
         [HarmonyPatch(typeof(Accessory_00), nameof(Accessory_00.UpdateCustomUI), [])]
@@ -433,9 +433,7 @@ namespace VarietyOfScales
         internal static int ExtensionSlots => UI.ExtensionSlots;
         static bool GetInfo(Human _, ChaListDefine.CategoryNo category, int id, ChaListDefine.KeyType key, out string value) =>
             Human.lstCtrl.GetInfo(category, id, key, out value);
-        internal static void SaveCustomChara() =>
-            CharaMods.Store(HumanCustom.Instance.Human);
-        internal static void SaveCustomCoord() =>
+        internal static void SaveCustom() =>
             CoordMods.Store(HumanCustom.Instance.Human);
     }
     public partial class Plugin : BasePlugin
@@ -445,11 +443,11 @@ namespace VarietyOfScales
         {
             Instance = this;
             Patch = Harmony.CreateAndPatchAll(typeof(Hooks), $"{Name}.Hooks");
+            Extension.PrepareSaveChara += AccessoryExtension.SaveCustom;
+            Extension.PrepareSaveCoord += AccessoryExtension.SaveCustom;
             Extension.Register<CharaMods, CoordMods>();
-            Extension.OnLoadChara += CharaMods.Apply;
-            Extension.OnLoadCoord += CoordMods.Apply;
-            Extension.PrepareSaveChara += AccessoryExtension.SaveCustomChara;
-            Extension.PrepareSaveCoord += AccessoryExtension.SaveCustomCoord;
+            Extension.OnLoadChara += CharaMods.Prepare;
+            Extension.OnLoadCoord += CharaMods.Prepare;
             UI.Initialize();
         }
     }

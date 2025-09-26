@@ -21,8 +21,7 @@ namespace VarietyOfScales
             Instance = this;
             Patch = Harmony.CreateAndPatchAll(typeof(Hooks), $"{Name}.Hooks");
             Extension.Register<CharaMods, CoordMods>();
-            Extension.OnLoadChara += CharaMods.Apply;
-            Extension.OnLoadCoord += CoordMods.Apply;
+            Extension.OnLoadChara += CoordMods.Apply;
         }
     }
 
