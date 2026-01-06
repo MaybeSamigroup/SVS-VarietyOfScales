@@ -22,29 +22,40 @@ namespace VarietyOfScales
         public Float3 Rotation { get; set; }
         public Float3 Scale { get; set; }
     }
+
     public partial class MoveMod
     {
         public List<Move> Moves { get; set; }
     }
+
     public partial class CoordMods : CoordinateExtension<CoordMods>
     {
         public Dictionary<int, MoveMod> Slots { get; set; } = new();
+
         public CoordMods Merge(CoordLimit limit, CoordMods mods) =>
             (limit & CoordLimit.Accessory) is CoordLimit.None ? this : mods;
     }
+
     [Extension<CharaMods, CoordMods>(Plugin.Name, "modifications.json")]
     public partial class CharaMods : CharacterExtension<CharaMods>, ComplexExtension<CharaMods, CoordMods>
     {
         public Dictionary<int, CoordMods> Coordinates { get; set; } = new();
+
         public CharaMods() => Coordinates = new();
+
         public CharaMods Merge(CharaLimit limit, CharaMods mods) =>
             (limit & CharaLimit.Coorde) is CharaLimit.None ? this : mods;
+
         public CoordMods Get(int coordinateType) =>
             Coordinates?.GetValueOrDefault(coordinateType, new());
+
         public CharaMods Merge(int coordinateType, CoordMods mods) => new()
         {
             Coordinates = Coordinates.Merge(coordinateType, mods)
         };
+
+        internal void CopyMove(int dst, int src, int slot) =>
+            Coordinates[dst].Slots[slot] = Coordinates.GetValueOrDefault(src, new()).Slots.GetValueOrDefault(slot, new());
     }
     #endregion
 
@@ -52,16 +63,19 @@ namespace VarietyOfScales
     public partial class CoordMods
     {
         internal static void Save(Human human) =>
-            Extension.Chara<CharaMods, CoordMods>(human,
-                Extension.Chara<CharaMods, CoordMods>(human)
-                    .Merge(human.data.Status.coordinateType, Store(human)));
+            Extension<CharaMods, CoordMods>.Humans.NowCoordinate[human] = Store(human);
+
         static CoordMods Store(Human human) => new()
         {
             Slots = Enumerable.Range(0, human.acs.Accessories.Count)
                 .Where(slot => slot >= 20 && human.acs.IsAccessory(slot))
                 .ToDictionary(slot => slot, slot => MoveMod.Store(human.acs.Accessories[slot]))
         };
+
+        internal void Store(AcsNode node, IEnumerable<int> slots) =>
+            slots.ForEach(slot => Slots[slot] = MoveMod.Store(node.Accessories[slot]));
     }
+
     public partial class MoveMod
     {
         internal static MoveMod Store(AcsLeaf leaf) => new()
@@ -69,6 +83,7 @@ namespace VarietyOfScales
             Moves = leaf.objAcsMove.Where(obj => obj != null).Select(Move.Store).ToList()
         };
     }
+
     public partial class Move
     {
         internal static Move Store(Transform tf) => new()
@@ -84,25 +99,29 @@ namespace VarietyOfScales
     public partial class Move
     {
         internal void Apply(Transform tf) =>
-           (tf.localPosition, tf.localEulerAngles, tf.localScale) = (Position, Rotation, Scale);
+            (tf.localPosition, tf.localEulerAngles, tf.localScale) = (Position, Rotation, Scale);
     }
+
     public partial class MoveMod
     {
-        internal void Apply(AcsLeaf leaf) => leaf.objAcsMove
-            .Where(obj => obj != null).ForEachIndex((tf, index) => Moves[index].Apply(tf));
+        internal void Apply(AcsLeaf leaf) => (Moves is not null)
+            .Maybe(() =>leaf.objAcsMove
+                .Where((tf, index) => tf is not null && index < Moves.Count)
+                .ForEachIndex((tf, index) => Moves[index].Apply(tf)));
     }
+
     public partial class CoordMods
     {
         internal int SlotCount => Slots.Keys.Aggregate(19, Math.Max) + 1;
     }
+
     public partial class CharaMods
     {
         internal static void Load(Human human) =>
-            Extension.Chara<CharaMods, CoordMods>(human).Prepare(human);
+            Extension<CharaMods, CoordMods>.Humans[human].Prepare(human);
+
         void Prepare(Human human) =>
-            AccessoryExtension.PrepareSlots(human,
-                Coordinates.Values.Select(mods => mods.SlotCount)
-                    .Aggregate(AccessoryExtension.SlotCount, Math.Max));
+            AccessoryExtension.PrepareSlots(human, Coordinates.Values.Select(mods => mods.SlotCount).Aggregate(20, Math.Max));
     }
 
     internal static partial class Hooks
@@ -122,22 +141,21 @@ namespace VarietyOfScales
         [HarmonyPatch(typeof(HumanData), nameof(HumanData.CopyLimited))]
         static void HumanDataCopyPrefix(HumanData dst, HumanData src) =>
             AccessoryExtension.PrepareSlots(dst, src.Coordinates
-                .Select(coord => coord.Accessory.parts.Length)
-                .Aggregate(AccessoryExtension.SlotCount, Math.Max));
+                .Select(coord => coord.Accessory.parts.Length).Aggregate(20, Math.Max));
     }
 
     static partial class AccessoryExtension
     {
         internal static void PrepareSlots(this Human human, int slots) => (
             F.Apply(PrepareSlots, human.acs, slots) +
-            F.Apply(PrepareSlots, human.data, slots)
+            F.Apply(PrepareSlots, human.data, slots) +
+            F.Apply(NotifySlotState, slots)
         ).Invoke();
 
         static void PrepareSlots(AcsNode node, int slots) =>
             (node._accessories_k__BackingField, node.nowCoordinate.Accessory.parts) = (
                 PrepareSlots(() => new AcsLeaf(), Dispose, node.Accessories, slots),
-                PrepareSlots(() => new AcsPart(), F.DoNothing.Ignoring<AcsPart>(), node.nowCoordinate.Accessory.parts, slots)
-            );
+                PrepareSlots(() => new AcsPart(), F.DoNothing.Ignoring<AcsPart>(), node.nowCoordinate.Accessory.parts, slots));
 
         internal static void PrepareSlots(HumanData data, int slots) =>
             data.Coordinates.Select(coord => F.Apply(PrepareSlots, coord.Accessory, slots))
@@ -160,20 +178,24 @@ namespace VarietyOfScales
             }).Invoke();
 
         static void PrepareSlots(this AcsData data, int slots) =>
-            data.parts = PrepareSlots(() => new AcsPart(), F.DoNothing.Ignoring<AcsPart>(), data.parts, slots);
+            data.parts = PrepareSlots(() => new AcsPart(), data.parts, slots);
 
         static void PrepareSlots(HumanDataStatus status, int slots) =>
-            status.showAccessory = PrepareSlots(() => true, F.DoNothing.Ignoring<bool>(), status.showAccessory, slots);
+            status.showAccessory = PrepareSlots(() => true, status.showAccessory, slots);
+
+        static T[] PrepareSlots<T>(Func<T> create, T[] items, int slots) =>
+            slots is < 20 or > 99 ? items : items.Length < slots ?
+                ExtendSlots(create, items, slots) : items.Where((_, index) => index < slots).ToArray();
 
         static T[] PrepareSlots<T>(Func<T> create, Action<T> destroy, T[] items, int slots) =>
-            slots is < 20 or > 99 ? items : items.Length < slots ?
-                ExtendSlots(create, items, slots) : ReduceSlots(destroy, items.Chunk(slots));
+            slots is < 20 or > 99 ? items : items.Length < slots ? ExtendSlots(create, items, slots) :
+                items.Where((_, index) => index < slots).ToArray().With(F.Apply(ReduceSlots, destroy, items, slots));
 
         static T[] ExtendSlots<T>(Func<T> create, T[] items, int slots) =>
             items.Concat(Enumerable.Repeat(0, slots - items.Length).Select(_ => create())).ToArray();
 
-        static T[] ReduceSlots<T>(Action<T> destroy, IEnumerable<T[]> items) =>
-            items.First().With(F.Apply(F.ForEach, items.Skip(1).SelectMany(chunk => chunk), destroy));
+        static void ReduceSlots<T>(Action<T> destroy, T[] items, int slots) =>
+            items.Where((_, index) => index >= slots).ForEach(destroy);
 
         internal static void Dispose(AcsLeaf leaf) =>
             (F.Apply(Human.Destroy, leaf.objAccessory).Ignoring() + leaf.Dispose).Invoke();

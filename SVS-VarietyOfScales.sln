@@ -2,6 +2,10 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.5.2.0
 MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "DC", "DC", "{3561E1E2-EED7-ADB1-06ED-D736262C1E15}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "SVS", "SVS", "{7A809970-4E1D-5CF8-5214-E26B1BF08A39}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DC_VarietyOfScales", "DC\DC_VarietyOfScales.csproj", "{DA6D78D3-B514-A51B-1B34-5A7165CA7AF7}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SVS_VarietyOfScales", "SVS\SVS_VarietyOfScales.csproj", "{B69EA171-F096-EFB8-E233-574E2FFA9C3D}"
@@ -24,7 +28,11 @@ Global
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{DA6D78D3-B514-A51B-1B34-5A7165CA7AF7} = {3561E1E2-EED7-ADB1-06ED-D736262C1E15}
+		{B69EA171-F096-EFB8-E233-574E2FFA9C3D} = {7A809970-4E1D-5CF8-5214-E26B1BF08A39}
+	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {7E5BE52C-0FCA-4BD5-95F9-D6892C72CD02}
+		SolutionGuid = {1922E33B-35EB-47F5-932D-6002FC9CE4EF}
 	EndGlobalSection
 EndGlobal

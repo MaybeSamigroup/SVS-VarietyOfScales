@@ -1,3 +1,5 @@
+using System;
+using System.Reactive.Disposables;
 using Character;
 using HarmonyLib;
 using BepInEx.Unity.IL2CPP;
@@ -19,17 +21,17 @@ namespace VarietyOfScales
             GetInfo(human.data.Tag, category, id, key, out value);
         static bool GetInfo(string tag, ChaListDefine.CategoryNo category, int id, ChaListDefine.KeyType key, out string value) =>
             Human.lstCtrl.GetInfo(ref tag, category, id, key, out value);
+        static void NotifySlotState(int slot) { }
+        static void NotifySlotRemove(int slot) { }
+        static void NotifySlotAssign(int slot, HumanDataAccessory.PartsInfo part) { }
+
+        internal static IDisposable[] Initialize() => [
+            ..Extension.Register<CharaMods, CoordMods>(),
+            Extension.OnLoadChara.Subscribe(CharaMods.Load)
+        ];
     }
     public partial class Plugin : BasePlugin
     {
         public const string Process = "DigitalCraft";
-        public override void Load()
-        {
-            Instance = this;
-            Patch = Harmony.CreateAndPatchAll(typeof(Hooks), $"{Name}.Hooks");
-            Extension.Register<CharaMods, CoordMods>();
-            Extension.OnLoadChara += CharaMods.Load;
-        }
     }
-
 }

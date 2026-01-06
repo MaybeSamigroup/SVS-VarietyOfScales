@@ -1,11 +1,12 @@
+using System;
+using System.Linq;
+using System.Reactive.Disposables;
+using UnityEngine;
+using Character;
 using HarmonyLib;
 using BepInEx;
 using BepInEx.Unity.IL2CPP;
-using System;
-using System.Linq;
-using UnityEngine;
 using Fishbone;
-using Character;
 using CoastalSmell;
 using Parent = ChaAccessoryDefine.AccessoryParentKey;
 using AcsNode = Character.HumanAccessory;
@@ -34,9 +35,7 @@ namespace VarietyOfScales
     static partial class AccessoryExtension
     {
         internal static AcsNode.DefaultColorData GetDefaultColorData(this AcsNode node, int slot) =>
-            node.Accessories[slot].cusAcsCmp == null
-                ? new AcsNode.DefaultColorData()
-                : new AcsNode.DefaultColorData(node.Accessories[slot].cusAcsCmp);
+            node.Accessories[slot].cusAcsCmp == null ? new AcsNode.DefaultColorData() : new AcsNode.DefaultColorData(node.Accessories[slot].cusAcsCmp);
     }
 
     internal static partial class Hooks
@@ -52,8 +51,7 @@ namespace VarietyOfScales
         internal static bool Check(this AcsNode node, int slot) =>
             slot < node.Accessories.Count && Check(node.Accessories[slot]);
         static bool Check(AcsLeaf leaf) =>
-            ((ChaListDefine.CategoryNo?)(leaf?.infoAccessory?.Category)
-                ?? ChaListDefine.CategoryNo.ao_none) is not ChaListDefine.CategoryNo.ao_none;
+            ((ChaListDefine.CategoryNo?)(leaf?.infoAccessory?.Category) ?? ChaListDefine.CategoryNo.ao_none) is not ChaListDefine.CategoryNo.ao_none;
     }
 
     internal static partial class Hooks
@@ -61,8 +59,7 @@ namespace VarietyOfScales
         [HarmonyPostfix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.ChangeAccessory), typeof(bool))]
         static void ChangeAccessoryPostfix(AcsNode __instance, bool forceChange) =>
-            Enumerable.Range(0, __instance.Accessories.Count)
-                .Where(slot => slot >= 20).ForEach(slot => __instance.Change(slot, forceChange));
+            Enumerable.Range(0, __instance.Accessories.Count).Where(slot => slot >= 20).ForEach(slot => __instance.Change(slot, forceChange));
 
         [HarmonyPrefix, HarmonyWrapSafe]
         [HarmonyPatch(typeof(AcsNode), nameof(AcsNode.ChangeAccessory), typeof(int), typeof(int), typeof(int), typeof(Parent), typeof(bool))]
@@ -87,37 +84,24 @@ namespace VarietyOfScales
 
         static void Change(AcsNode node, int slot, ChaListDefine.CategoryNo category, int id, Parent parent) =>
             (category is not ChaListDefine.CategoryNo.ao_none).Either(
-                F.Apply(Remove, node, slot, category, id,
-                    parent is Parent.none ? GetDefaultParent(node.human, category, id) : parent),
-                F.Apply(Dispose, node.Accessories[slot]) + F.Apply(Assign, node, slot, category, id,
-                    parent is Parent.none ? GetDefaultParent(node.human, category, id) : parent));
-
-        static void Remove(AcsNode node, int slot, ChaListDefine.CategoryNo category, int id, Parent parent) =>
-            (node.Accessories[slot] = new AcsLeaf()).With(F.Apply(PostRemove, node.nowCoordinate.Accessory.parts[slot]));
-
-        static void Assign(AcsNode node, int slot, ChaListDefine.CategoryNo category, int id, Parent parent) =>
-            (node.Accessories[slot] =
-                new AcsLeaf(node.human, category, id, slot,
-                    GetWeightType(node.human, category, id),
-                    ToTransform(node, parent.ToString())))
-                    .With(F.Apply(PostChange, node.nowCoordinate.Accessory.parts[slot], node, slot, parent));
-
-        static Parent GetDefaultParent(Human human, ChaListDefine.CategoryNo category, int id) =>
-            GetInfo(human, category, id, ChaListDefine.KeyType.Parent, out var value)
-                && Enum.TryParse<Parent>(value, out var defaultParent) ? defaultParent : Parent.RootBone;
-
-        static Human.UseCopyWeightType GetWeightType(Human human, ChaListDefine.CategoryNo category, int id) =>
-            GetInfo(human, category, id, ChaListDefine.KeyType.WeightType, out var data)
-                && Enum.TryParse<Human.UseCopyWeightType>(data, out var value) ? value : Human.UseCopyWeightType.None;
-
-        static Transform ToTransform(AcsNode node, string parent) =>
-            node.GetRefTransform(Enum.TryParse<Table.RefObjKey>(parent, out var value) ? value : Table.RefObjKey.RootBone);
-
-        static void PostRemove(AcsPart part) =>
+                F.Apply(Remove, node, slot) +
+                F.Apply(Remove, node.nowCoordinate.Accessory.parts[slot], slot) +
+                F.Apply(NotifySlotRemove, slot),
+                F.Apply(Assign, node, slot, category, id, parent is Parent.none ?
+                    GetInfo(node.human, category, id, ChaListDefine.KeyType.Parent, out var value)
+                        && Enum.TryParse<Parent>(value, out var defaultParent) ? defaultParent : Parent.RootBone : parent));
+        static void Remove(AcsNode node, int slot) =>
+            node.Accessories[slot] = new AcsLeaf();
+        static void Remove(AcsPart part, int slot) =>
             part.Copy(AcsNode.NoneAcsData);
-
-        static void PostChange(AcsPart part, AcsNode node, int slot, Parent parent) => (
-            F.Apply(PostChange, node.human, part, node.Accessories[slot]) +
+        static void Assign(AcsNode node, int slot, ChaListDefine.CategoryNo category, int id, Parent parent) =>
+            Assign(node.nowCoordinate.Accessory.parts[slot], slot, node,
+                node.Accessories[slot] = new AcsLeaf(node.human, category, id, slot,
+                GetInfo(node.human, category, id, ChaListDefine.KeyType.WeightType, out var data)
+                    && Enum.TryParse<Human.UseCopyWeightType>(data, out var value) ?
+                        value : Human.UseCopyWeightType.None, ToTransform(node, parent.ToString())), parent);
+        static void Assign(AcsPart part, int slot, AcsNode node, AcsLeaf leaf, Parent parent) => (
+            F.Apply(PostChange, node.human, part, leaf) +
             F.Apply(ChangeAcsColor, node, slot) +
             F.Apply(ChangePtnTexture, node, slot, -1) +
             F.Apply(ChangePtnColor, node, slot, -1) +
@@ -125,8 +109,9 @@ namespace VarietyOfScales
             F.Apply(ChangeParent, part, parent) +
             F.Apply(ApplyMove, node, slot) +
             F.Apply(ApplyDynamicBones, node.Accessories[slot], !(part.noShake || part.fkInfo.use)) +
-            F.Apply(SetupFK, node.Accessories[slot], part) +
-            F.Apply(ApplyFK, node.Accessories[slot], part)
+            F.Apply(SetupFK, leaf, part) +
+            F.Apply(ApplyFK, leaf, part) +
+            F.Apply(NotifySlotAssign, slot, part)
         ).Invoke();
 
         static void PostChange(Human human, AcsPart part, AcsLeaf leaf) =>
@@ -157,14 +142,13 @@ namespace VarietyOfScales
             leaf._dynamicBones.ForEach(bone => bone.enabled = state);
 
         static void ApplyMove(AcsNode node, int slot) =>
-            Extension.Coord<CharaMods, CoordMods>(node.human).Slots.TryGetValue(slot, out var move)
+            Extension<CharaMods, CoordMods>.Humans.NowCoordinate[node.human].Slots.TryGetValue(slot, out var move)
                 .Either(F.Apply(node.UpdateAccessoryMoveFromInfo, slot).Ignoring(), F.Apply(ApplyMove, node.Accessories[slot], move));
 
         static void ApplyMove(AcsLeaf leaf, MoveMod mod) => mod.Apply(leaf);
 
         static void ChangeParent(AcsPart part, Parent parent) =>
-            (part.parentKeyType, part.partsOfHead) =
-                ((int)parent, ChaAccessoryDefine.CheckPartsOfHead(parent));
+            (part.parentKeyType, part.partsOfHead) = ((int)parent, ChaAccessoryDefine.CheckPartsOfHead(parent));
     }
     internal static partial class Hooks
     {
@@ -177,6 +161,8 @@ namespace VarietyOfScales
     {
         internal static void ChangeParent(this AcsNode node, int slot, Parent parent) =>
             node.Accessories[slot].objAccessory.transform.SetParent(ToTransform(node, parent.ToString()), false);
+        static Transform ToTransform(AcsNode node, string parent) =>
+            node.GetRefTransform(Enum.TryParse<Table.RefObjKey>(parent, out var value) ? value : Table.RefObjKey.RootBone);
     }
 
     internal static partial class Hooks
@@ -427,6 +413,9 @@ namespace VarietyOfScales
         static bool AccessoryResetCloth(AcsLeaf __instance) =>
             __instance._dynamicBones?.Where(bone => bone != null)
                 ?.Any(bone => true.With(bone.ResetParticlesPosition)) ?? false;
+
+        internal static IDisposable Initialize() =>
+            Disposable.Create(Harmony.CreateAndPatchAll(typeof(Hooks), $"{Plugin.Name}.Hooks").UnpatchSelf);
     }
 
     [BepInProcess(Process)]
@@ -437,9 +426,13 @@ namespace VarietyOfScales
         internal static Plugin Instance;
         public const string Name = "VarietyOfScales";
         public const string Guid = $"{Process}.{Name}";
-        public const string Version = "0.3.0";
-        private Harmony Patch;
+        public const string Version = "0.8.0";
+        CompositeDisposable Subscriptions = new (); 
+        public Plugin() : base() => Instance = this;
+        public override void Load() => Subscriptions = [
+            Hooks.Initialize(), ..AccessoryExtension.Initialize()
+        ];
         public override bool Unload() =>
-                true.With(Patch.UnpatchSelf) && base.Unload();
+            true.With(Subscriptions.Dispose) && base.Unload();
     }
 }
