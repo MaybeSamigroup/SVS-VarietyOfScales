@@ -117,11 +117,10 @@ namespace VarietyOfScales
 
     public partial class CharaMods
     {
-        internal static void Load(Human human) =>
-            Extension<CharaMods, CoordMods>.Humans[human].Prepare(human);
-
-        void Prepare(Human human) =>
-            AccessoryExtension.PrepareSlots(human, Coordinates.Values.Select(mods => mods.SlotCount).Aggregate(20, Math.Max));
+       internal static void Load(Human human, int slots) =>
+            Extension<CharaMods, CoordMods>.Humans[human].Prepare(human, slots);
+        void Prepare(Human human, int slots) =>
+            AccessoryExtension.PrepareSlots(human, Coordinates.Values.Select(mods => mods.SlotCount).Aggregate(slots, Math.Max));
     }
 
     internal static partial class Hooks
@@ -143,7 +142,6 @@ namespace VarietyOfScales
             AccessoryExtension.PrepareSlots(dst, src.Coordinates
                 .Select(coord => coord.Accessory.parts.Length).Aggregate(20, Math.Max));
     }
-
     static partial class AccessoryExtension
     {
         internal static void PrepareSlots(this Human human, int slots) => (
